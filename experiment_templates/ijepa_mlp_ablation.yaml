@@ -1,0 +1,46 @@
+# I-JEPA MLP Ablation Template
+# For ablation studies (trainable %, batch size, LR, etc.)
+
+# Agent configuration
+agent: ijepa_planning_agent_v3
+backbone: ijepa
+model_id: null
+
+# Training hyperparameters - MODIFY THESE FOR ABLATIONS
+batch_size: 48  # Try: 32, 64, 128
+learning_rate: 0.0001  # Try: 5e-5, 2e-4
+encoder_learning_rate: 0.00003  # Try: 1e-5, 5e-5
+trainable_fraction: 0.5  # Try: 0.25, 0.75, 1.0
+epochs: 30
+data_percent: 100  # Try: 25, 50, 75
+
+# Multi-camera setup
+use_multi_camera: true
+camera_views:
+  - cam_l0
+  - cam_f0
+  - cam_r0
+vision_mode: multi_per_view
+image_size: [224, 224]
+
+# Resource allocation
+partition: l40s_public
+num_gpus: 4
+num_nodes: 1
+cpus_per_task: 16
+time_limit: "48:00:00"
+account: torch_pr_68_tandon_advanced
+
+# Cache
+cache_name: training_cache_ijepa_planning_agent_v3_v5
+use_cache_overlay: true
+
+# Evaluation
+eval_split: navtest
+eval_workers: 48
+
+# Tags
+tags:
+  - ijepa
+  - mlp
+  - ablation

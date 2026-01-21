@@ -1,0 +1,47 @@
+# ViT MLP Template
+# Standard ViT (no I-JEPA pretraining) for baseline comparison
+
+# Agent configuration
+agent: ijepa_planning_agent_v4
+backbone: vit
+model_id: google/vit-huge-patch14-224-in21k
+
+# Training hyperparameters (same as I-JEPA for fair comparison)
+batch_size: 48
+learning_rate: 0.0001  # 1e-4
+encoder_learning_rate: 0.00003  # 3e-5
+trainable_fraction: 0.5
+epochs: 30
+data_percent: 100
+
+# Multi-camera setup
+use_multi_camera: true
+camera_views:
+  - cam_l0
+  - cam_f0
+  - cam_r0
+vision_mode: multi_per_view
+image_size: [224, 224]
+
+# Resource allocation
+partition: l40s_public
+num_gpus: 4
+num_nodes: 1
+cpus_per_task: 16
+time_limit: "48:00:00"
+account: torch_pr_68_tandon_advanced
+
+# Cache configuration (reuses I-JEPA cache since raw images)
+cache_name: training_cache_ijepa_planning_agent_v3_v5
+use_cache_overlay: true
+
+# Evaluation
+eval_split: navtest
+eval_workers: 48
+
+# Tags
+tags:
+  - vit
+  - mlp
+  - baseline
+  - multi-camera
