@@ -76,6 +76,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Professional documentation (no emojis)
 - Clean repository organization
 
+## [0.3.3] - 2026-01-22
+
+### Fixed
+- **Interactive/Quick init not creating directories**: Fixed missing directory creation
+  - `interactive_init()` and `quick_init()` now properly create project directories
+  - Config file is now saved to `.hpc_config.yaml`
+  - Added `_finalize_project_setup()` helper function in CLI
+
 ## [0.3.2] - 2026-01-22
 
 ### Fixed

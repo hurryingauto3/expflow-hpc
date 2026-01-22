@@ -18,6 +18,8 @@ def cmd_init(args):
         # Interactive mode with menus
         from .interactive_init import interactive_init
         config = interactive_init(args.project_name)
+        # Create directories and save config
+        _finalize_project_setup(config)
     elif args.quick:
         # Quick mode with smart defaults (no prompts)
         from .interactive_init import quick_init
@@ -25,6 +27,8 @@ def cmd_init(args):
         config = quick_init(args.project_name)
         print(f"  Account: {config.default_account}")
         print(f"  Partition: {config.default_partition}")
+        # Create directories and save config
+        _finalize_project_setup(config)
     else:
         # Legacy auto-detect mode
         print(f"Initializing project: {args.project_name}")
@@ -37,6 +41,27 @@ def cmd_init(args):
     print(f" Next: cd {config.project_root}")
     print(f" Docs: https://github.com/hurryingauto3/expflow-hpc/docs")
     print()
+
+
+def _finalize_project_setup(config):
+    """Create project directories and save config"""
+    from pathlib import Path
+
+    print(f"\nCreating project directories...")
+    for directory in [
+        config.experiments_dir,
+        f"{config.logs_dir}/output",
+        f"{config.logs_dir}/error",
+        config.cache_dir,
+        config.checkpoints_dir
+    ]:
+        Path(directory).mkdir(parents=True, exist_ok=True)
+        print(f"   {directory}")
+
+    # Save config
+    config_save_path = f"{config.project_root}/.hpc_config.yaml"
+    config.save(config_save_path)
+    print(f"\n Configuration saved to {config_save_path}")
 
 
 def cmd_info(args):
