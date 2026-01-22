@@ -76,6 +76,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Professional documentation (no emojis)
 - Clean repository organization
 
+## [0.2.1] - 2026-01-22
+
+### Fixed
+- **Account truncation**: Changed `format=Account` to `format=Account%40` to prevent truncation
+  - Was showing `torch_pr_+` instead of `torch_pr_68_general`
+- **Default partition selection**: Now intelligently selects accessible partition
+  - Tests partition-account combinations during initialization
+  - Prefers public partitions (l40s_public, h200_public)
+  - Falls back to first accessible partition if preferred ones unavailable
+  - Prevents selecting inaccessible partitions like h200_bpeher
+
+### Changed
+- `create_default_config()` now validates partition access before setting default
+- Added `_quick_test_partition()` helper for fast partition validation
+
 ## [Unreleased]
 
 ### Planned

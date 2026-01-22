@@ -132,11 +132,11 @@ class HPCEnvironment:
     def get_slurm_accounts() -> List[str]:
         """Get available SLURM accounts for user"""
         try:
-            # Use format to get Account field explicitly
+            # Use format with explicit width to prevent truncation
             result = subprocess.run(
                 ["sacctmgr", "show", "associations",
                  f"user={HPCEnvironment.get_username()}",
-                 "format=Account", "-n"],
+                 "format=Account%40", "-n"],  # %40 = 40 character width
                 capture_output=True,
                 text=True,
                 timeout=5
@@ -207,7 +207,24 @@ class HPCEnvironment:
 
         # Get available partitions
         partitions = HPCEnvironment.get_available_partitions()
-        default_partition = partitions[0] if partitions else "gpu"
+
+        # Find first accessible partition using simple validation
+        default_partition = "gpu"  # fallback
+        if partitions and accounts:
+            # Try to find a partition we can access
+            # Prefer public/general partitions
+            partition_preferences = ['l40s_public', 'h200_public', 'rtx8000']
+
+            for pref in partition_preferences:
+                if pref in partitions:
+                    # Quick test if accessible
+                    if HPCEnvironment._quick_test_partition(pref, default_account):
+                        default_partition = pref
+                        break
+
+            # If no preferred partition found, use first partition
+            if default_partition == "gpu" and partitions:
+                default_partition = partitions[0]
 
         config = HPCConfig(
             username=username,
@@ -222,6 +239,29 @@ class HPCEnvironment:
         )
 
         return config
+
+    @staticmethod
+    def _quick_test_partition(partition: str, account: str) -> bool:
+        """Quick test if partition-account combination works"""
+        try:
+            # GPU partitions that require --gres
+            gpu_partitions = {'h200_public', 'h200_tandon', 'h200_bpeher',
+                            'l40s_public', 'rtx8000', 'a100_public'}
+
+            cmd = ["sbatch", "--test-only", "-p", partition, "-A", account,
+                   "-N1", "-t", "1:00:00"]
+
+            if partition in gpu_partitions:
+                cmd.extend(["--gres=gpu:1"])
+
+            cmd.extend(["--wrap=hostname"])
+
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+
+            # Success if would schedule
+            return result.returncode == 0 and "to start at" in result.stdout
+        except:
+            return False
 
 
 def initialize_project(project_name: str, config_path: Optional[str] = None) -> HPCConfig:
