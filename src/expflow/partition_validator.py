@@ -48,24 +48,35 @@ class PartitionValidator:
 
         # NYU Greene partition rules (known requirements)
         self.known_gpu_only_partitions = {
-            'h200_public', 'h200_tandon', 'h200_bpeher',
-            'l40s_public', 'rtx8000'
+            'h200_public', 'h200_tandon', 'h200_bpeher', 'h200_courant', 'h200_cds', 'h200',
+            'l40s_public', 'l40s',
+            'a100_public', 'a100',
+            'rtx8000', 'v100'
         }
 
         self.gpu_type_map = {
             'h200_public': 'H200',
             'h200_tandon': 'H200',
             'h200_bpeher': 'H200',
+            'h200_courant': 'H200',
+            'h200_cds': 'H200',
+            'h200': 'H200',
             'l40s_public': 'L40s',
+            'l40s': 'L40s',
+            'a100_public': 'A100',
+            'a100': 'A100',
             'rtx8000': 'RTX8000',
+            'v100': 'V100',
         }
 
-    def detect_partition_access(self, accounts: Optional[List[str]] = None) -> Dict[str, List[str]]:
+    def detect_partition_access(self, accounts: Optional[List[str]] = None,
+                                 filter_known_gpus: bool = True) -> Dict[str, List[str]]:
         """
         Auto-detect which accounts can access which partitions
 
         Args:
             accounts: List of accounts to test. If None, auto-detects from sacctmgr
+            filter_known_gpus: Only test known GPU partitions (much faster)
 
         Returns:
             Dict mapping partition -> list of accounts that can access it
@@ -73,15 +84,28 @@ class PartitionValidator:
         if accounts is None:
             accounts = self._get_user_accounts()
 
-        partitions = self._get_partitions()
+        all_partitions = self._get_partitions()
 
-        print(f"Testing partition access for {len(accounts)} accounts × {len(partitions)} partitions...")
+        # Filter to only GPU partitions if requested (much faster)
+        if filter_known_gpus:
+            # Known NYU Greene GPU partitions
+            known_gpu_partitions = {
+                'h200_public', 'h200_tandon', 'h200_bpeher', 'h200_courant', 'h200_cds',
+                'l40s_public', 'l40s',
+                'a100_public', 'a100',
+                'rtx8000', 'v100'
+            }
+            partitions = [p for p in all_partitions if p in known_gpu_partitions]
+        else:
+            partitions = all_partitions
+
+        print(f"Testing {len(partitions)} GPU partitions with {len(accounts)} accounts...")
 
         partition_access = {}
 
         for partition in partitions:
             accessible_by = []
-            requires_gpu = partition in self.known_gpu_only_partitions
+            requires_gpu = partition in self.known_gpu_only_partitions or filter_known_gpus
 
             for account in accounts:
                 if self._test_partition_access(partition, account, requires_gpu):
@@ -184,7 +208,7 @@ class PartitionValidator:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=5
+                timeout=2  # Reduced from 5 to 2 seconds
             )
 
             # Success if job would be scheduled
@@ -195,7 +219,11 @@ class PartitionValidator:
             if "is not valid for this job" in result.stderr:
                 return False
 
-        except:
+        except subprocess.TimeoutExpired:
+            # Timeout likely means partition exists but is checking
+            # Be conservative and return False
+            return False
+        except Exception:
             pass
 
         return False

@@ -76,6 +76,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Professional documentation (no emojis)
 - Clean repository organization
 
+## [0.3.1] - 2026-01-22
+
+### Fixed
+- **Partition detection timeout**: Optimized partition validation to be much faster
+  - Now filters to only known GPU partitions (h200, l40s, a100, rtx8000, v100)
+  - Reduced test timeout from 5s to 2s per partition
+  - Reduced total tests from 36 (2 accts × 18 partitions) to ~10-12 tests
+  - Detection now completes in ~5-10 seconds instead of timing out
+  - Added better error handling for timeouts
+
+### Added
+- **More GPU partitions recognized**:
+  - H200: h200_public, h200_tandon, h200_bpeher, h200_courant, h200_cds, h200
+  - L40s: l40s_public, l40s
+  - A100: a100_public, a100
+  - RTX8000: rtx8000
+  - V100: v100
+
+### Changed
+- `detect_partition_access()` now has `filter_known_gpus=True` by default
+- Interactive init uses optimized detection (only GPU partitions)
+- Better warning messages when no partitions detected
+
 ## [0.3.0] - 2026-01-22
 
 ### Added

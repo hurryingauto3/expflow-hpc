@@ -47,13 +47,15 @@ def interactive_init(project_name: str) -> HPCConfig:
 
     # Step 3: GPU/Partition preference with intelligent recommendations
     print("\n[3/4] Selecting default GPU partition...")
-    print("  Analyzing partition access (10-30 seconds)...")
+    print("  Analyzing GPU partition access...")
 
     validator = PartitionValidator()
-    partition_map = validator.detect_partition_access(accounts)
+    # Use optimized detection (only known GPU partitions)
+    partition_map = validator.detect_partition_access(accounts, filter_known_gpus=True)
 
     if not partition_map:
-        print("  WARNING: No partitions detected")
+        print("  WARNING: No GPU partitions detected")
+        print("  Using fallback partition. You can edit .hpc_config.yaml later.")
         default_partition = "gpu"
     else:
         default_partition = _select_partition_interactive(
