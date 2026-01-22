@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 import yaml
 
-from hpc_config import HPCConfig, load_project_config
+from .hpc_config import HPCConfig, load_project_config
 
 
 # =============================================================================

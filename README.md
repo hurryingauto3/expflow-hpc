@@ -34,14 +34,32 @@ python -m expflow.examples.simple submit exp001
 
 ### 1. Install
 
+**With pip:**
 ```bash
 pip install git+https://github.com/hurryingauto3/expflow-hpc.git
 ```
 
-Or from source:
+**With conda:**
+```bash
+# Create environment
+conda create -n expflow python=3.10
+conda activate expflow
+
+# Install
+pip install git+https://github.com/hurryingauto3/expflow-hpc.git
+```
+
+**From source:**
 ```bash
 git clone https://github.com/hurryingauto3/expflow-hpc.git
 cd expflow-hpc
+
+# With pip
+pip install -e .
+
+# With conda
+conda create -n expflow python=3.10
+conda activate expflow
 pip install -e .
 ```
 

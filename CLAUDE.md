@@ -68,6 +68,8 @@ Real-time SLURM queue analysis:
 ## Development Commands
 
 ### Setup for Development
+
+**With pip:**
 ```bash
 # Install in editable mode
 pip install -e .
@@ -75,6 +77,18 @@ pip install -e .
 # Install with dev dependencies (if added later)
 pip install -e .[dev]
 ```
+
+**With conda (common on HPC):**
+```bash
+# Create development environment
+conda create -n expflow-dev python=3.10
+conda activate expflow-dev
+
+# Install in editable mode
+pip install -e .
+```
+
+**Note:** ExpFlow works with both pip and conda. On NYU Greene HPC, many users prefer conda for environment isolation. When users create custom experiment managers, they should include conda activation in their SLURM scripts if using conda environments.
 
 ### Testing the CLI
 ```bash

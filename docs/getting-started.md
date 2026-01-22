@@ -11,51 +11,81 @@
 
 ## Installation
 
-### Option 1: Quick Install (Recommended)
+### Option 1: pip install (Recommended)
+
+**On NYU Greene HPC:**
 
 ```bash
-# SSH into NYU Greene
+# SSH into Greene
 ssh YOUR_NYU_ID@greene.hpc.nyu.edu
 
-# Clone repository to your home directory
-cd ~
-git clone https://github.com/ah7072/hpc-experiment-manager.git
-cd hpc-experiment-manager
+# Install directly
+pip install --user git+https://github.com/hurryingauto3/expflow-hpc.git
 
-# Make CLI executable
-chmod +x hpcexp
-
-# Add to PATH
-echo 'export PATH="$HOME/hpc-experiment-manager:$PATH"' >> ~/.bashrc
-source ~/.bashrc
-
-# Install Python dependencies
-pip install --user pyyaml pandas
-
-# Optional: Install Gemini API for AI suggestions
-pip install --user google-generativeai
-export GEMINI_API_KEY="your_api_key_here"
+# Verify installation
+expflow info
 ```
 
-### Option 2: Conda Environment
+### Option 2: conda environment
+
+**Create isolated conda environment:**
 
 ```bash
-# Create dedicated environment
-module load anaconda3/2025.06
-conda create -n hpcexp python=3.10
-conda activate hpcexp
+# SSH into Greene
+ssh YOUR_NYU_ID@greene.hpc.nyu.edu
 
-# Install dependencies
-pip install pyyaml pandas google-generativeai
+# Load conda module (if not already loaded)
+module load anaconda3/2020.07
 
-# Clone and setup
-cd ~
-git clone https://github.com/YOUR_USERNAME/hpc-experiment-manager.git
-cd hpc-experiment-manager
-chmod +x hpcexp
+# Create environment
+conda create -n expflow python=3.10
+conda activate expflow
 
-# Add alias (add to ~/.bashrc)
-alias hpcexp="conda run -n hpcexp python $HOME/hpc-experiment-manager/hpcexp"
+# Install ExpFlow
+pip install git+https://github.com/hurryingauto3/expflow-hpc.git
+
+# Verify installation
+expflow info
+
+# Add to ~/.bashrc for future sessions
+echo "conda activate expflow" >> ~/.bashrc
+```
+
+**Using conda in SLURM scripts:**
+
+ExpFlow auto-generates SLURM scripts. To use your conda environment in experiments, modify your custom manager's `_generate_train_script()`:
+
+```python
+def _generate_train_script(self, config):
+    return f'''#!/bin/bash
+#SBATCH --partition={config['partition']}
+#SBATCH --gres=gpu:{config['num_gpus']}
+
+# Activate conda environment
+module load anaconda3/2020.07
+conda activate expflow
+
+# Your training code
+python train.py --model {config['model']}
+'''
+```
+
+### Option 3: development install
+
+**For contributing or modifying ExpFlow:**
+
+```bash
+# Clone repository
+git clone https://github.com/hurryingauto3/expflow-hpc.git
+cd expflow-hpc
+
+# With pip
+pip install -e .
+
+# With conda
+conda create -n expflow python=3.10
+conda activate expflow
+pip install -e .
 ```
 
 ## Verification
