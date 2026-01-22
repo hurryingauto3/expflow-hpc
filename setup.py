@@ -12,7 +12,7 @@ long_description = readme_file.read_text() if readme_file.exists() else ""
 
 setup(
     name="expflow",
-    version="0.1.0",
+    version="0.2.0",
     author="Ali Hamza",
     author_email="ah7072@nyu.edu",
     description="Lightweight experiment tracking for HPC clusters",
