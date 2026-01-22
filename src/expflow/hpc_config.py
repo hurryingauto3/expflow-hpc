@@ -222,7 +222,7 @@ def initialize_project(project_name: str, config_path: Optional[str] = None) -> 
     print("Auto-detecting HPC environment...")
     config = HPCEnvironment.create_default_config(project_name)
 
-    print(f"\n✓ Detected HPC Environment:")
+    print(f"\n Detected HPC Environment:")
     print(f"  Cluster: {config.cluster_name}")
     print(f"  Username: {config.username}")
     print(f"  Scratch: {config.scratch_dir}")
@@ -240,12 +240,12 @@ def initialize_project(project_name: str, config_path: Optional[str] = None) -> 
         config.checkpoints_dir
     ]:
         Path(directory).mkdir(parents=True, exist_ok=True)
-        print(f"  ✓ {directory}")
+        print(f"   {directory}")
 
     # Save config
     config_save_path = f"{config.project_root}/.hpc_config.yaml"
     config.save(config_save_path)
-    print(f"\n✓ Configuration saved to {config_save_path}")
+    print(f"\n Configuration saved to {config_save_path}")
 
     return config
 

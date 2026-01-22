@@ -229,10 +229,10 @@ python evaluate.py \\
 EXIT_CODE=$?
 
 if [ $EXIT_CODE -eq 0 ]; then
-    echo "✓ Evaluation complete"
+    echo " Evaluation complete"
     echo "Results: $RESULTS_DIR/{config['exp_id']}_results.json"
 else
-    echo "✗ Evaluation failed"
+    echo " Evaluation failed"
 fi
 
 exit $EXIT_CODE
@@ -264,7 +264,7 @@ exit $EXIT_CODE
         self.metadata[exp_id]["completed_at"] = str(Path(results_file).stat().st_mtime)
         self._save_metadata()
 
-        print(f"\n✓ Results harvested for {exp_id}")
+        print(f"\n Results harvested for {exp_id}")
         print(f"  Top-1 Accuracy: {results.get('top1_acc', 'N/A')}")
         print(f"  Top-5 Accuracy: {results.get('top5_acc', 'N/A')}")
         print(f"  Test Loss: {results.get('test_loss', 'N/A')}")

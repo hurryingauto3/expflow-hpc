@@ -241,31 +241,31 @@ python scripts/experiment_manager.py show b15
 
 ```
 scripts/
-├── experiment_manager.py          # Main script
-├── experiment_templates/          # YAML templates
-│   ├── ijepa_mlp.yaml
-│   ├── ijepa_mlp_v4.yaml
-│   ├── vit_mlp.yaml
-│   └── ijepa_mlp_ablation.yaml
-├── experiment_configs/            # Generated configs
-│   ├── b15.yaml
-│   ├── b16.yaml
-│   └── experiments.json           # Metadata database
-├── generated/                     # Auto-generated SLURM scripts
-│   ├── train_b15.slurm
-│   └── eval_b15.slurm
-└── train_and_eval.sh             # Wrapper (existing)
+ experiment_manager.py          # Main script
+ experiment_templates/          # YAML templates
+    ijepa_mlp.yaml
+    ijepa_mlp_v4.yaml
+    vit_mlp.yaml
+    ijepa_mlp_ablation.yaml
+ experiment_configs/            # Generated configs
+    b15.yaml
+    b16.yaml
+    experiments.json           # Metadata database
+ generated/                     # Auto-generated SLURM scripts
+    train_b15.slurm
+    eval_b15.slurm
+ train_and_eval.sh             # Wrapper (existing)
 
 /scratch/ah7072/experiments/
-├── checkpoints/                   # Checkpoint registry
-│   └── <run_id>.txt              # Checkpoint paths
-├── training/                      # Training outputs
-│   └── exp_b15_*/
-├── evaluations/                   # Evaluation results
-│   └── eval_navtest_exp_b15_*/
-└── logs/                          # SLURM logs
-    ├── output/
-    └── error/
+ checkpoints/                   # Checkpoint registry
+    <run_id>.txt              # Checkpoint paths
+ training/                      # Training outputs
+    exp_b15_*/
+ evaluations/                   # Evaluation results
+    eval_navtest_exp_b15_*/
+ logs/                          # SLURM logs
+     output/
+     error/
 ```
 
 ## Experiment Config YAML Format
@@ -445,22 +445,22 @@ If not in a git repo, git fields will be null. This is fine - metadata still tra
 ## Benefits Over Manual Workflow
 
 ### Before (Manual)
-1. ❌ Edit `ijepa_mlp_train_100pc.slurm` directly
-2. ❌ Risk overwriting previous config
-3. ❌ Manually copy experiment name
-4. ❌ Manually record parameters in Excel
-5. ❌ Forget to note git commit
-6. ❌ Manually parse PDM scores from logs
-7. ❌ Incomplete tracking
+1.  Edit `ijepa_mlp_train_100pc.slurm` directly
+2.  Risk overwriting previous config
+3.  Manually copy experiment name
+4.  Manually record parameters in Excel
+5.  Forget to note git commit
+6.  Manually parse PDM scores from logs
+7.  Incomplete tracking
 
 ### After (Automated)
-1. ✅ Define experiment in YAML
-2. ✅ Auto-generate unique SLURM scripts
-3. ✅ All metadata tracked automatically
-4. ✅ Git commit/branch recorded
-5. ✅ Results harvested automatically
-6. ✅ Master CSV always up to date
-7. ✅ Complete experiment history
+1.  Define experiment in YAML
+2.  Auto-generate unique SLURM scripts
+3.  All metadata tracked automatically
+4.  Git commit/branch recorded
+5.  Results harvested automatically
+6.  Master CSV always up to date
+7.  Complete experiment history
 
 ## Integration with Existing Workflow
 

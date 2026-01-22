@@ -19,7 +19,7 @@ ssh YOUR_NYU_ID@greene.hpc.nyu.edu
 
 # Clone repository to your home directory
 cd ~
-git clone https://github.com/YOUR_USERNAME/hpc-experiment-manager.git
+git clone https://github.com/ah7072/hpc-experiment-manager.git
 cd hpc-experiment-manager
 
 # Make CLI executable
@@ -90,7 +90,7 @@ hpcexp init imagenet_resnet
 # Output:
 # Auto-detecting HPC environment...
 #
-# ✓ Detected HPC Environment:
+#  Detected HPC Environment:
 #   Cluster: greene
 #   Username: ah7072
 #   Scratch: /scratch/ah7072
@@ -99,13 +99,13 @@ hpcexp init imagenet_resnet
 #   Available Partitions: l40s_public, h200_tandon, ...
 #
 # Creating project directories...
-#   ✓ /scratch/ah7072/imagenet_resnet/experiments
-#   ✓ /scratch/ah7072/imagenet_resnet/experiments/logs/output
-#   ✓ /scratch/ah7072/imagenet_resnet/experiments/logs/error
-#   ✓ /scratch/ah7072/imagenet_resnet/experiments/cache
-#   ✓ /scratch/ah7072/imagenet_resnet/experiments/checkpoints
+#    /scratch/ah7072/imagenet_resnet/experiments
+#    /scratch/ah7072/imagenet_resnet/experiments/logs/output
+#    /scratch/ah7072/imagenet_resnet/experiments/logs/error
+#    /scratch/ah7072/imagenet_resnet/experiments/cache
+#    /scratch/ah7072/imagenet_resnet/experiments/checkpoints
 #
-# ✓ Configuration saved to /scratch/ah7072/imagenet_resnet/.hpc_config.yaml
+#  Configuration saved to /scratch/ah7072/imagenet_resnet/.hpc_config.yaml
 ```
 
 ### 2. Inspect Auto-Detected Configuration
@@ -194,7 +194,7 @@ python my_manager.py new \
     --description "Baseline ResNet50 - first run"
 
 # Output:
-# ✓ Created experiment: exp001
+#  Created experiment: exp001
 #   Config: /scratch/YOUR_NYU_ID/imagenet_resnet/experiment_configs/exp001.yaml
 ```
 
@@ -218,8 +218,8 @@ hpcexp resources --use-gemini
 python my_manager.py submit exp001 --dry-run
 
 # Output:
-# ✓ Generated training script: /scratch/YOUR_NYU_ID/imagenet_resnet/generated_scripts/train_exp001.slurm
-# ✓ Generated evaluation script: /scratch/YOUR_NYU_ID/imagenet_resnet/generated_scripts/eval_exp001.slurm
+#  Generated training script: /scratch/YOUR_NYU_ID/imagenet_resnet/generated_scripts/train_exp001.slurm
+#  Generated evaluation script: /scratch/YOUR_NYU_ID/imagenet_resnet/generated_scripts/eval_exp001.slurm
 #
 # [DRY RUN] Would submit the following jobs:
 #   Training: sbatch .../train_exp001.slurm
@@ -246,10 +246,10 @@ cat generated_scripts/train_exp001.slurm
 python my_manager.py submit exp001
 
 # Output:
-# ✓ Generated training script: .../train_exp001.slurm
-# ✓ Generated evaluation script: .../eval_exp001.slurm
-# ✓ Submitted training job: 12345678
-# ✓ Submitted evaluation job: 12345679 (depends on 12345678)
+#  Generated training script: .../train_exp001.slurm
+#  Generated evaluation script: .../eval_exp001.slurm
+#  Submitted training job: 12345678
+#  Submitted evaluation job: 12345679 (depends on 12345678)
 ```
 
 ### 10. Monitor Progress
@@ -275,7 +275,7 @@ python my_manager.py harvest exp001
 # Output:
 # Parsing results from: .../results/exp001_results.json
 #
-# ✓ Results harvested for exp001
+#  Results harvested for exp001
 #   Top-1 Accuracy: 76.15%
 #   Top-5 Accuracy: 92.87%
 #   Test Loss: 1.234
@@ -288,7 +288,7 @@ python my_manager.py harvest exp001
 python my_manager.py export results.csv
 
 # Output:
-# ✓ Exported 1 experiments to results.csv
+#  Exported 1 experiments to results.csv
 
 # View results
 column -t -s ',' results.csv | less -S
@@ -474,4 +474,4 @@ Be specific: "ResNet50, LR=0.1, warmup=5, cosine schedule"
 
 ---
 
-Happy experimenting! 🚀
+Happy experimenting! 

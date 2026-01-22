@@ -352,9 +352,9 @@ class ResourceAdvisor:
                 # Build reason
                 reason_parts = []
                 if partition_info.available_gpus >= num_gpus:
-                    reason_parts.append(f"✓ {partition_info.available_gpus} GPUs available now")
+                    reason_parts.append(f" {partition_info.available_gpus} GPUs available now")
                 else:
-                    reason_parts.append(f"⚠ Only {partition_info.available_gpus} GPUs available ({num_gpus} needed)")
+                    reason_parts.append(f" Only {partition_info.available_gpus} GPUs available ({num_gpus} needed)")
 
                 if partition_info.queue_length == 0:
                     reason_parts.append("empty queue")
@@ -455,7 +455,7 @@ Provide a concise recommendation (2-3 sentences) with reasoning.
         for name, info in partition_stats.items():
             config = self.PARTITIONS[name]
 
-            print(f"📊 {name.upper()}")
+            print(f" {name.upper()}")
             print(f"   GPU Type: {info.gpu_type} ({config['arch']}, {config['memory_gb']}GB)")
             print(f"   Available: {info.available_gpus}/{info.total_gpus} GPUs")
             print(f"   Nodes: {info.available_nodes}/{info.total_nodes} available")
@@ -463,17 +463,17 @@ Provide a concise recommendation (2-3 sentences) with reasoning.
 
             if info.avg_wait_time_mins is not None:
                 if info.avg_wait_time_mins == 0:
-                    print(f"   Wait Time: ✓ Ready now")
+                    print(f"   Wait Time:  Ready now")
                 else:
                     print(f"   Wait Time: ~{info.avg_wait_time_mins:.0f} minutes")
 
             # Status indicator
             if info.available_gpus >= 4:
-                status = "🟢 Good availability"
+                status = "[READY] Good availability"
             elif info.available_gpus > 0:
-                status = "🟡 Limited availability"
+                status = "[LIMITED] Limited availability"
             else:
-                status = "🔴 No GPUs available"
+                status = " No GPUs available"
             print(f"   Status: {status}\n")
 
         print("="*70 + "\n")
@@ -491,7 +491,7 @@ Provide a concise recommendation (2-3 sentences) with reasoning.
         print("="*70 + "\n")
 
         if gemini_suggestion:
-            print("💡 AI Suggestion:")
+            print(" AI Suggestion:")
             print(f"   {gemini_suggestion}\n")
             print("-"*70 + "\n")
 
@@ -509,7 +509,7 @@ Provide a concise recommendation (2-3 sentences) with reasoning.
             print(f"   Precision: {rec.precision_recommendation}")
 
             if rec.warnings:
-                print(f"   ⚠ Warnings:")
+                print(f"    Warnings:")
                 for warning in rec.warnings:
                     print(f"      - {warning}")
 
@@ -519,12 +519,12 @@ Provide a concise recommendation (2-3 sentences) with reasoning.
 
         # Print reproducibility checklist
         print("Reproducibility Checklist when switching GPUs:")
-        print("  ✓ Lock global batch size (not per-GPU)")
-        print("  ✓ Schedule LR by steps (not epochs)")
-        print("  ✓ Set precision explicitly (bf16/fp16/fp32)")
-        print("  ✓ Set TF32 mode explicitly")
-        print("  ✓ Use deterministic settings if critical")
-        print("  ✓ Run ≥3 seeds for statistical confidence")
+        print("   Lock global batch size (not per-GPU)")
+        print("   Schedule LR by steps (not epochs)")
+        print("   Set precision explicitly (bf16/fp16/fp32)")
+        print("   Set TF32 mode explicitly")
+        print("   Use deterministic settings if critical")
+        print("   Run ≥3 seeds for statistical confidence")
         print()
 
 

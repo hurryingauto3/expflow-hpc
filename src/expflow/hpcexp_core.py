@@ -267,7 +267,7 @@ class BaseExperimentManager(ABC):
         }
         self._save_metadata()
 
-        print(f"✓ Created experiment: {exp_id}")
+        print(f" Created experiment: {exp_id}")
         print(f"  Config: {config_path}")
 
         return config_dict
@@ -303,14 +303,14 @@ class BaseExperimentManager(ABC):
             with open(train_script_path, 'w') as f:
                 f.write(train_script)
             meta["train_script_path"] = str(train_script_path)
-            print(f"✓ Generated training script: {train_script_path}")
+            print(f" Generated training script: {train_script_path}")
 
         if not train_only:
             eval_script = self._generate_eval_script(full_config)
             with open(eval_script_path, 'w') as f:
                 f.write(eval_script)
             meta["eval_script_path"] = str(eval_script_path)
-            print(f"✓ Generated evaluation script: {eval_script_path}")
+            print(f" Generated evaluation script: {eval_script_path}")
 
         if dry_run:
             print("\n[DRY RUN] Would submit the following jobs:")
@@ -334,7 +334,7 @@ class BaseExperimentManager(ABC):
                 # Parse job ID from "Submitted batch job 12345"
                 train_job_id = result.stdout.strip().split()[-1]
                 job_ids["train_job_id"] = train_job_id
-                print(f"✓ Submitted training job: {train_job_id}")
+                print(f" Submitted training job: {train_job_id}")
 
             if not train_only:
                 cmd = ["sbatch"]
@@ -350,7 +350,7 @@ class BaseExperimentManager(ABC):
                 )
                 eval_job_id = result.stdout.strip().split()[-1]
                 job_ids["eval_job_id"] = eval_job_id
-                print(f"✓ Submitted evaluation job: {eval_job_id}")
+                print(f" Submitted evaluation job: {eval_job_id}")
 
             # Update metadata
             meta["status"] = "submitted"
@@ -457,4 +457,4 @@ class BaseExperimentManager(ABC):
 
         df = pd.DataFrame(records)
         df.to_csv(output_file, index=False)
-        print(f"✓ Exported {len(records)} experiments to {output_file}")
+        print(f" Exported {len(records)} experiments to {output_file}")

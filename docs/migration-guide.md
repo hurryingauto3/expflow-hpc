@@ -14,7 +14,7 @@ This guide shows how to convert your existing NavSim experiment manager to use t
 ```bash
 # On NYU Greene
 cd ~
-git clone https://github.com/YOUR_USERNAME/expflow-hpc.git
+git clone https://github.com/hurryingauto3/expflow-hpc
 cd expflow-hpc
 
 # Initialize your NavSim project
@@ -22,11 +22,11 @@ cd expflow-hpc
 
 # This creates:
 # /scratch/YOUR_NYU_ID/navsim-planning/
-#   ├── .hpc_config.yaml              (auto-detected!)
-#   ├── experiment_configs/
-#   ├── experiment_templates/
-#   ├── generated_scripts/
-#   └── experiments/
+#    .hpc_config.yaml              (auto-detected!)
+#    experiment_configs/
+#    experiment_templates/
+#    generated_scripts/
+#    experiments/
 ```
 
 ### 2. Create NavSim-Specific Manager
@@ -190,7 +190,7 @@ echo "$BEST_CKPT" > "{self.checkpoints_dir}/{config['exp_id']}.txt"
                 self.metadata[exp_id]["status"] = "completed"
                 self._save_metadata()
 
-                print(f"✓ PDM Score: {results['pdm_score']:.4f}")
+                print(f" PDM Score: {results['pdm_score']:.4f}")
                 return results
 
         return {}
@@ -317,7 +317,7 @@ cd your-repo
 
 ## Common Migration Pitfalls
 
-### ❌ Mistake 1: Hardcoding in Templates
+###  Mistake 1: Hardcoding in Templates
 ```yaml
 # BAD (old way)
 account: torch_pr_68_tandon_advanced  # Only works for one user!
@@ -327,7 +327,7 @@ account: torch_pr_68_tandon_advanced  # Only works for one user!
 # Or override per-experiment if needed
 ```
 
-### ❌ Mistake 2: Absolute Paths in Configs
+###  Mistake 2: Absolute Paths in Configs
 ```yaml
 # BAD
 data_path: /scratch/ah7072/data
@@ -336,7 +336,7 @@ data_path: /scratch/ah7072/data
 data_path: data  # Relative to scratch_dir
 ```
 
-### ❌ Mistake 3: Not Using Config Object
+###  Mistake 3: Not Using Config Object
 ```python
 # BAD
 scratch = "/scratch/ah7072"
@@ -378,4 +378,4 @@ See:
 
 ---
 
-**Result**: Your NavSim experiment manager now works for ANY NYU HPC user! 🎉
+**Result**: Your NavSim experiment manager now works for ANY NYU HPC user! 
