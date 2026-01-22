@@ -10,11 +10,8 @@ import argparse
 import sys
 from pathlib import Path
 
-# Add parent directory to path to import framework
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from hpcexp_core import BaseExperimentManager, BaseExperimentConfig
-from hpc_config import load_project_config
+from expflow.hpcexp_core import BaseExperimentManager, BaseExperimentConfig
+from expflow.hpc_config import load_project_config
 from dataclasses import dataclass, field
 from typing import List, Optional
 
