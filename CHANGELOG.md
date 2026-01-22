@@ -76,6 +76,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Professional documentation (no emojis)
 - Clean repository organization
 
+## [0.3.0] - 2026-01-22
+
+### Added
+- **Interactive Initialization**: Professional CLI menu-based setup experience
+  - `expflow init -i <project>` for interactive mode with guided menus
+  - `expflow init -q <project>` for quick mode with smart defaults
+  - Account selection with intelligent recommendations (prefers "general" accounts)
+  - GPU/Partition selection with categorization (H200, L40s, A100, etc.)
+  - Real-time partition access validation during setup
+  - Time limit preferences (6h, 12h, 24h, 48h, 72h, custom)
+  - Configuration summary with confirmation before proceeding
+
+### Changed
+- **Partition validation integrated into core** (removed from examples/)
+  - PartitionValidator now used during interactive init
+  - Moved `partition_aware_manager.py` to `.archive/`
+  - Interactive init is now the recommended setup method
+
+### Improved
+- Account recommendations based on naming patterns (general > public > specific)
+- Partition recommendations based on accessibility (public > specific)
+- GPU categorization for easier selection (H200/L40s/A100/RTX8000)
+- Better user experience with clear markers: [RECOMMENDED], [Public access]
+
 ## [0.2.2] - 2026-01-22
 
 ### Fixed

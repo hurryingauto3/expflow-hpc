@@ -13,8 +13,22 @@ from datetime import datetime
 
 def cmd_init(args):
     """Initialize a new HPC experiment project"""
-    print(f"Initializing project: {args.project_name}")
-    config = initialize_project(args.project_name)
+
+    if args.interactive:
+        # Interactive mode with menus
+        from .interactive_init import interactive_init
+        config = interactive_init(args.project_name)
+    elif args.quick:
+        # Quick mode with smart defaults (no prompts)
+        from .interactive_init import quick_init
+        print(f"Quick setup for: {args.project_name}")
+        config = quick_init(args.project_name)
+        print(f"  Account: {config.default_account}")
+        print(f"  Partition: {config.default_partition}")
+    else:
+        # Legacy auto-detect mode
+        print(f"Initializing project: {args.project_name}")
+        config = initialize_project(args.project_name)
 
     print("\n" + "=" * 70)
     print(" Project ready!")
@@ -211,6 +225,16 @@ For full docs: https://github.com/hurryingauto3/expflow-hpc
     # Init command
     init_parser = subparsers.add_parser("init", help="Initialize new project")
     init_parser.add_argument("project_name", help="Project name")
+    init_parser.add_argument(
+        "-i", "--interactive",
+        action="store_true",
+        help="Interactive setup with menus (recommended)"
+    )
+    init_parser.add_argument(
+        "-q", "--quick",
+        action="store_true",
+        help="Quick setup with smart defaults (no prompts)"
+    )
 
     # Info command
     info_parser = subparsers.add_parser("info", help="Show HPC environment info")
