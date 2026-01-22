@@ -103,6 +103,45 @@ def cmd_resources(args):
         sys.exit(1)
 
 
+def cmd_partitions(args):
+    """Show partition-account access map"""
+    try:
+        from .partition_validator import PartitionValidator
+
+        print("Detecting partition access (this may take 10-30 seconds)...")
+        validator = PartitionValidator()
+
+        accounts = HPCEnvironment.get_slurm_accounts()
+        partition_map = validator.detect_partition_access(accounts)
+
+        if args.json:
+            import json
+            print(json.dumps(partition_map, indent=2))
+        else:
+            validator.print_access_map()
+
+            # Show auto-selection example
+            if not args.quiet:
+                print("\nAuto-Selection Examples:")
+                print("-" * 70)
+
+                # Try to auto-select H200
+                result = validator.auto_select_partition(gpu_type="H200")
+                if result:
+                    partition, account = result
+                    print(f"  For H200 GPU: partition={partition}, account={account}")
+
+                # Try to auto-select L40s
+                result = validator.auto_select_partition(gpu_type="L40s")
+                if result:
+                    partition, account = result
+                    print(f"  For L40s GPU: partition={partition}, account={account}")
+
+    except ImportError:
+        print("Error: partition_validator module not found")
+        sys.exit(1)
+
+
 def cmd_template(args):
     """Create a template experiment configuration"""
     try:
@@ -133,6 +172,7 @@ description: "TODO: Add description"
 
 # Resource configuration
 partition: {config.default_partition}
+account: {config.default_account}
 num_gpus: 4
 num_nodes: 1
 cpus_per_task: 16
@@ -192,6 +232,17 @@ For full docs: https://github.com/hurryingauto3/expflow-hpc
     )
     resources_parser.add_argument("--project-root", help="Project root directory")
 
+    # Partitions command
+    partitions_parser = subparsers.add_parser(
+        "partitions", help="Show partition-account access map"
+    )
+    partitions_parser.add_argument(
+        "--json", action="store_true", help="Output as JSON"
+    )
+    partitions_parser.add_argument(
+        "--quiet", action="store_true", help="Don't show auto-selection examples"
+    )
+
     # Template command
     template_parser = subparsers.add_parser(
         "template", help="Create experiment template"
@@ -216,6 +267,8 @@ For full docs: https://github.com/hurryingauto3/expflow-hpc
         cmd_config(args)
     elif args.command == "resources":
         cmd_resources(args)
+    elif args.command == "partitions":
+        cmd_partitions(args)
     elif args.command == "template":
         cmd_template(args)
 

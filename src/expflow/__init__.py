@@ -10,6 +10,7 @@ __version__ = "0.1.0"
 from .hpcexp_core import BaseExperimentManager, BaseExperimentConfig, ExperimentMetadata
 from .hpc_config import HPCConfig, HPCEnvironment, initialize_project, load_project_config
 from .resource_advisor import ResourceAdvisor, PartitionInfo, ResourceRecommendation
+from .partition_validator import PartitionValidator, validate_job_config
 
 __all__ = [
     "BaseExperimentManager",
@@ -22,4 +23,6 @@ __all__ = [
     "ResourceAdvisor",
     "PartitionInfo",
     "ResourceRecommendation",
+    "PartitionValidator",
+    "validate_job_config",
 ]
