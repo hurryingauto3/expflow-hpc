@@ -212,7 +212,8 @@ class PartitionValidator:
             )
 
             # Success if job would be scheduled
-            if result.returncode == 0 and "to start at" in result.stdout:
+            # Note: sbatch --test-only writes success message to stderr, not stdout
+            if result.returncode == 0 and "to start at" in result.stderr:
                 return True
 
             # Check for access denied errors

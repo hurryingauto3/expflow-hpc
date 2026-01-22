@@ -76,6 +76,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Professional documentation (no emojis)
 - Clean repository organization
 
+## [0.3.2] - 2026-01-22
+
+### Fixed
+- **CRITICAL: Partition detection bug**: Fixed stdout/stderr check in partition validation
+  - `sbatch --test-only` writes success message to stderr, not stdout
+  - Was checking `result.stdout` causing all partition tests to fail
+  - Now correctly checks `result.stderr` for "to start at" message
+  - This fixes the "No GPU partitions detected" issue during interactive init
+
 ## [0.3.1] - 2026-01-22
 
 ### Fixed
