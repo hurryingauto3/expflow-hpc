@@ -208,22 +208,29 @@ class HPCEnvironment:
         # Get available partitions
         partitions = HPCEnvironment.get_available_partitions()
 
-        # Find first accessible partition using simple validation
+        # Smart partition selection based on known preferences
+        # NYU Greene specific: prefer public accessible partitions
         default_partition = "gpu"  # fallback
-        if partitions and accounts:
-            # Try to find a partition we can access
-            # Prefer public/general partitions
-            partition_preferences = ['l40s_public', 'h200_public', 'rtx8000']
+        if partitions:
+            # Ordered by preference (most broadly accessible first)
+            partition_preferences = [
+                'l40s_public',      # L40s, broadly accessible
+                'h200_public',      # H200, broadly accessible
+                'rtx8000',          # RTX8000, broadly accessible
+                'a100_public',      # A100, broadly accessible
+                'h200_tandon',      # H200, Tandon only
+                'h200_courant',     # H200, Courant only
+                'h200_cds',         # H200, CDS only
+            ]
 
+            # Select first preferred partition that exists
             for pref in partition_preferences:
                 if pref in partitions:
-                    # Quick test if accessible
-                    if HPCEnvironment._quick_test_partition(pref, default_account):
-                        default_partition = pref
-                        break
+                    default_partition = pref
+                    break
 
-            # If no preferred partition found, use first partition
-            if default_partition == "gpu" and partitions:
+            # If no known partition found, use first available
+            if default_partition == "gpu":
                 default_partition = partitions[0]
 
         config = HPCConfig(

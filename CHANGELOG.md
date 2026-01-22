@@ -76,6 +76,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Professional documentation (no emojis)
 - Clean repository organization
 
+## [0.2.2] - 2026-01-22
+
+### Fixed
+- **Default partition selection**: Now uses preference-based selection without slow validation
+  - Prioritizes broadly accessible partitions (l40s_public, h200_public)
+  - Removed slow sbatch --test-only during initialization
+  - Always picks l40s_public if available (most accessible)
+  - Falls through preference list: l40s_public → h200_public → rtx8000 → etc.
+
+### Changed
+- Removed `_quick_test_partition()` from initialization path (too slow)
+- Partition preferences now NYU Greene specific
+- Init is now instant (no validation delays)
+
 ## [0.2.1] - 2026-01-22
 
 ### Fixed
