@@ -132,8 +132,11 @@ class HPCEnvironment:
     def get_slurm_accounts() -> List[str]:
         """Get available SLURM accounts for user"""
         try:
+            # Use format to get Account field explicitly
             result = subprocess.run(
-                ["sacctmgr", "show", "user", HPCEnvironment.get_username(), "-P"],
+                ["sacctmgr", "show", "associations",
+                 f"user={HPCEnvironment.get_username()}",
+                 "format=Account", "-n"],
                 capture_output=True,
                 text=True,
                 timeout=5
@@ -142,11 +145,18 @@ class HPCEnvironment:
             if result.returncode == 0:
                 accounts = []
                 for line in result.stdout.split('\n'):
-                    if '|' in line and 'Account' not in line:
-                        parts = line.split('|')
-                        if len(parts) > 1:
-                            accounts.append(parts[1])
-                return list(set(accounts))
+                    account = line.strip()
+                    # Filter out empty lines and default 'users' account
+                    if account and account != 'users':
+                        accounts.append(account)
+                # Return unique accounts, preserving order
+                seen = set()
+                unique_accounts = []
+                for acc in accounts:
+                    if acc not in seen:
+                        seen.add(acc)
+                        unique_accounts.append(acc)
+                return unique_accounts
         except:
             pass
 
@@ -157,15 +167,26 @@ class HPCEnvironment:
         """Get available SLURM partitions"""
         try:
             result = subprocess.run(
-                ["sinfo", "-o", "%R", "--noheader"],
+                ["sinfo", "-h", "-o", "%R"],
                 capture_output=True,
                 text=True,
                 timeout=5
             )
 
             if result.returncode == 0:
-                partitions = [p.strip() for p in result.stdout.split('\n') if p.strip()]
-                return list(set(partitions))
+                partitions = []
+                for line in result.stdout.split('\n'):
+                    partition = line.strip()
+                    if partition:
+                        partitions.append(partition)
+                # Return unique partitions, preserving order
+                seen = set()
+                unique_partitions = []
+                for part in partitions:
+                    if part not in seen:
+                        seen.add(part)
+                        unique_partitions.append(part)
+                return unique_partitions
         except:
             pass
 

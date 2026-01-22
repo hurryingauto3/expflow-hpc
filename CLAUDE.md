@@ -221,10 +221,15 @@ Use text instead:
 ### Debugging SLURM Integration
 Key commands for testing:
 ```bash
-sinfo -h -o "%R"                    # List partitions
-squeue -u $USER -o "%.18i %.9P"     # User's jobs
-sacctmgr show user $USER -P         # User's accounts
+sinfo -h -o "%R"                                        # List partitions
+squeue -u $USER -o "%.18i %.9P"                         # User's jobs
+sacctmgr show associations user=$USER format=Account -n # User's accounts (correct way)
 ```
+
+**Important:** The account detection uses `sacctmgr show associations user=$USER format=Account -n` instead of the older `sacctmgr show user $USER -P` because:
+- `-P` output has complex pipe-delimited format that's hard to parse
+- `format=Account -n` gives clean, one-account-per-line output
+- Filters out the default 'users' account automatically
 
 ## What NOT to Do
 
