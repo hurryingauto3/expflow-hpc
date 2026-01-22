@@ -12,6 +12,7 @@ Lightweight experiment tracking for HPC clusters.
 - **[User Guide](user-guide.md)** - Full feature documentation
 - **[Creating Custom Managers](custom-managers.md)** - Adapt for your research
 - **[Migration Guide](migration-guide.md)** - Converting existing code
+- **[Partition Access Guide](partition-access-guide.md)** - NYU Greene partition/account setup
 
 ### Reference
 - **[API Reference](api-reference.md)** - Python API documentation
