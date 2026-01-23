@@ -8,233 +8,363 @@
 
 **ExpFlow** auto-detects your HPC environment (username, scratch paths, SLURM accounts) and automates experiment tracking - no hardcoded paths, no manual script editing, no Excel spreadsheets.
 
-```bash
-# Install
-pip install git+https://github.com/hurryingauto3/expflow-hpc.git
-
-# Initialize project (auto-detects YOUR username and paths!)
-expflow init my-research
-
-# Create and run experiments
-cd /scratch/YOUR_ID/my-research
-python -m expflow.examples.simple new --exp-id exp001 --template baseline
-python -m expflow.examples.simple submit exp001
-```
-
-## Features
-
-- **Auto-detects** your username, scratch directory, SLURM accounts
-- **YAML-based configs** - no more editing SLURM scripts
-- **Resource advisor** - real-time GPU availability and recommendations
-- **Complete tracking** - git commits, job IDs, timestamps, results
-- **Reproducible** - warns about GPU/precision changes
-- **Extensible** - subclass for your specific use case
-
 ## Quick Start
 
-### 1. Install
-
-**With pip:**
 ```bash
-pip install git+https://github.com/hurryingauto3/expflow-hpc.git
-```
-
-**With conda:**
-```bash
-# Create environment
-conda create -n expflow python=3.10
-conda activate expflow
-
 # Install
 pip install git+https://github.com/hurryingauto3/expflow-hpc.git
+
+# Initialize with interactive setup
+expflow init -i my-research
+
+# Navigate to project
+cd /scratch/YOUR_ID/my-research
+
+# Create template
+expflow template baseline
+
+# Check resources and monitor experiments
+expflow resources --status
+expflow status
+expflow logs exp001
 ```
 
-**From source:**
+## Key Features
+
+- **Auto-Detection**: Automatically detects username, scratch directory, SLURM accounts, and partition access
+- **Interactive Setup**: Menu-based initialization with intelligent account and GPU recommendations
+- **Experiment Monitoring**: Built-in commands for status tracking, log viewing, and job management
+- **Resource Advisor**: Real-time GPU availability and smart recommendations
+- **Partition Validation**: Automatic partition-account compatibility testing
+- **YAML-Based Configs**: No more editing SLURM scripts manually
+- **Complete Tracking**: Git commits, job IDs, timestamps, and results automatically logged
+- **Extensible**: Subclass `BaseExperimentManager` for custom workflows
+
+## Installation
+
+### From GitHub (Recommended)
+```bash
+pip install git+https://github.com/hurryingauto3/expflow-hpc.git
+```
+
+### With Conda
+```bash
+conda create -n expflow python=3.10
+conda activate expflow
+pip install git+https://github.com/hurryingauto3/expflow-hpc.git
+```
+
+### From Source
 ```bash
 git clone https://github.com/hurryingauto3/expflow-hpc.git
 cd expflow-hpc
-
-# With pip
-pip install -e .
-
-# With conda
-conda create -n expflow python=3.10
-conda activate expflow
 pip install -e .
 ```
 
-### 2. Initialize Your Project
+## Getting Started
+
+### 1. Initialize Your Project
+
+**Interactive Mode (Recommended):**
+```bash
+expflow init -i my-research
+```
+
+Guided setup with:
+- Account selection (prefers "general" accounts for broad access)
+- GPU/Partition selection (H200, L40s, A100, RTX8000 categories)
+- Time limit preferences (6h, 12h, 24h, 48h, 72h)
+- Automatic partition access validation
+
+**Quick Mode:**
+```bash
+expflow init -q my-research
+```
+
+Uses smart defaults without prompts.
+
+### 2. Check Your Environment
 
 ```bash
-# Auto-detects YOUR environment
-expflow init my-research
-
-# Output:
-# [OK] Detected: greene cluster, user: YOUR_ID
-# [OK] Created: /scratch/YOUR_ID/my-research
+expflow info
 ```
 
-### 3. Create Experiment
+Output:
+```
+======================================================================
+HPC Environment Information
+======================================================================
+Username: ah7072
+Scratch: /scratch/ah7072
+Cluster: greene
+Accounts: torch_pr_68_general, torch_pr_68_tandon_advanced
+Partitions: l40s_public, h200_public, rtx8000
+```
+
+### 3. Create Experiment Template
 
 ```bash
 cd /scratch/YOUR_ID/my-research
-
-# Create from template
 expflow template baseline
-
-# Edit template
-vim experiment_templates/baseline.yaml
 ```
 
-### 4. Run
+Edit `experiment_templates/baseline.yaml`:
+```yaml
+description: "Baseline experiment"
+
+# Your parameters
+model: resnet50
+dataset: imagenet
+batch_size: 256
+learning_rate: 0.1
+
+# Resources (auto-detected defaults)
+partition: l40s_public
+account: torch_pr_68_general
+num_gpus: 4
+num_nodes: 1
+cpus_per_task: 16
+time_limit: "48:00:00"
+```
+
+### 4. Monitor and Manage Experiments
 
 ```bash
-# Create experiment
-python -m expflow.examples.simple new \
-    --exp-id exp001 \
-    --template baseline \
-    --description "Baseline ResNet50"
+# View all experiments and running jobs
+expflow status
 
-# Check resources
-expflow resources --status
+# List experiments
+expflow list
+expflow list --status running
 
-# Submit
-python -m expflow.examples.simple submit exp001
+# View logs
+expflow logs exp001              # Last 50 lines
+expflow logs exp001 -n 100       # Last 100 lines
+expflow logs exp001 --type eval  # Evaluation logs
 
-# Harvest results
-python -m expflow.examples.simple harvest exp001
+# Follow logs in real-time
+expflow tail exp001
 
-# Export to CSV
-python -m expflow.examples.simple export results.csv
+# Cancel jobs
+expflow cancel exp001
 ```
 
-## Documentation
+## Core Commands
 
-- **[Getting Started](docs/getting-started.md)** - Complete tutorial
-- **[User Guide](docs/user-guide.md)** - Full documentation
-- **[API Reference](docs/api-reference.md)** - For developers
-- **[Examples](examples/)** - Image classification, LLM fine-tuning, RL
+### Initialization
+```bash
+expflow init -i <project>    # Interactive setup with menus
+expflow init -q <project>    # Quick setup with defaults
+expflow init <project>       # Legacy auto-detect mode
+```
 
-## Use Cases
+### Environment Info
+```bash
+expflow info                 # Show HPC environment details
+expflow config               # Show project configuration
+```
 
-| Use Case | Example | Status |
-|----------|---------|--------|
-| Image Classification | ResNet, ViT on ImageNet | Ready |
-| LLM Fine-tuning | LLaMA, GPT with LoRA | Ready |
-| Reinforcement Learning | PPO, SAC on Atari | Ready |
-| NavSim Planning | I-JEPA planning agents | Ready |
+### Resource Management
+```bash
+expflow resources --status                     # Check GPU availability
+expflow partitions                             # Show partition-account access map
+expflow partitions --json                      # Export as JSON
+```
 
-See [`examples/`](examples/) for complete implementations.
+### Experiment Monitoring
+```bash
+expflow status                                 # Show experiments and SLURM jobs
+expflow list                                   # List all experiments
+expflow list --status running                  # Filter by status
+expflow logs <exp_id>                          # View experiment logs
+expflow logs <exp_id> -n 100 --errors          # View last 100 lines of errors
+expflow tail <exp_id>                          # Follow logs in real-time
+expflow cancel <exp_id>                        # Cancel running jobs
+```
+
+### Templates
+```bash
+expflow template <name>      # Create experiment template
+```
 
 ## Why ExpFlow?
 
-**Before:**
+### Before ExpFlow
 ```bash
-# Edit SLURM script manually
+# Manually edit SLURM scripts
 vim train.slurm
 
-# Hardcoded paths
-#SBATCH --account=torch_pr_68_tandon  # Only works for one user!
-export DATA=/scratch/ah7072/data      # Hardcoded!
+# Hardcoded paths that only work for you
+#SBATCH --account=my_account        # Others can't use this!
+export DATA=/scratch/myuser/data    # Hardcoded!
 
 sbatch train.slurm
-# → Manually track in Excel
-# → Forget git commit
-# → Lose hyperparameters
+
+# Track experiments manually in Excel
+# Forget git commits
+# Lose hyperparameters
 ```
 
-**After:**
+### With ExpFlow
 ```bash
-# Define once in YAML (works for ANY user)
-expflow init my-project
+# One-time setup (works for ANY user)
+expflow init -i my-project
 
-# Create experiment (auto-generates SLURM scripts)
-python -m expflow.examples.simple new --exp-id exp001 --template baseline
+# Create experiment from template
+python -m my_manager new --exp-id exp001 --template baseline
 
 # Submit (auto-detects YOUR paths, account, GPUs)
-python -m expflow.examples.simple submit exp001
+python -m my_manager submit exp001
+
+# Monitor in real-time
+expflow status
+expflow tail exp001
 
 # Auto-harvest results
-python -m expflow.examples.simple harvest exp001
-python -m expflow.examples.simple export results.csv
+python -m my_manager harvest exp001
+python -m my_manager export results.csv
 ```
 
 **Time Saved:** ~80% reduction in experiment setup time
 
-## For Your Research
+## Resource Advisor
 
-Create a custom experiment manager in 3 steps:
+Check GPU availability before submitting:
+
+```bash
+$ expflow resources --status
+
+======================================================================
+GPU Resource Status
+======================================================================
+
+L40S_PUBLIC
+   Total: 40 GPUs
+   Available: 12
+   In Use: 28
+   Queue: 3 jobs
+   Status: AVAILABLE
+
+H200_TANDON
+   Total: 10 GPUs
+   Available: 0
+   In Use: 10
+   Queue: 8 jobs
+   Wait Time: ~4 hours
+   Status: BUSY
+
+Recommendation: Use l40s_public with 4 GPUs (best availability)
+```
+
+## Partition Management
+
+View partition-account compatibility:
+
+```bash
+$ expflow partitions
+
+======================================================================
+Partition Access Map
+======================================================================
+
+h200_public (GPU: H200) [GPU Required]
+  ✓ torch_pr_68_general
+  ✓ torch_pr_68_tandon_advanced
+
+l40s_public (GPU: L40s) [GPU Required]
+  ✓ torch_pr_68_general
+
+Account Access Summary:
+  torch_pr_68_general → h200_public, l40s_public, rtx8000
+  torch_pr_68_tandon_advanced → h200_public, h200_tandon
+```
+
+## Creating Custom Managers
+
+For project-specific workflows, create a custom manager:
 
 ```python
 from expflow import BaseExperimentManager
 
 class MyManager(BaseExperimentManager):
     def _generate_train_script(self, config):
-        """Your training SLURM script"""
+        """Generate SLURM training script"""
         return f'''#!/bin/bash
 #SBATCH --gres=gpu:{config['num_gpus']}
+#SBATCH --partition={config['partition']}
+#SBATCH --account={config['account']}
+
 python train.py --model {config['model']} ...
 '''
 
     def _generate_eval_script(self, config):
-        """Your evaluation script"""
+        """Generate SLURM evaluation script"""
         return "#!/bin/bash\npython evaluate.py ..."
 
     def harvest_results(self, exp_id):
-        """Parse your results"""
-        return {"accuracy": 0.95}
+        """Parse experiment results"""
+        return {"accuracy": 0.95, "loss": 0.12}
 ```
 
-See **[Creating Custom Managers](docs/custom-managers.md)** for details.
-
-## Highlights
-
-### Auto-Detection
+Use your manager:
 ```bash
-$ expflow info
-Cluster: greene
-Username: YOUR_ID (auto-detected!)
-Scratch: /scratch/YOUR_ID (auto-detected!)
-Account: your_slurm_account (auto-detected!)
-Partitions: l40s_public, h200_tandon, ...
+python my_manager.py new --exp-id exp001 --template baseline
+python my_manager.py submit exp001
+python my_manager.py harvest exp001
+python my_manager.py export results.csv
 ```
 
-### Resource Advisor
-```bash
-$ expflow resources --status
+## Documentation
 
-L40S_PUBLIC
-   Available: 12/40 GPUs
-   Status: Ready now
+- **[USER_GUIDE.md](USER_GUIDE.md)** - Complete user guide with examples
+- **[CHANGELOG.md](CHANGELOG.md)** - Version history and updates
 
-H200_TANDON
-   Available: 0/10 GPUs
-   Queue: 8 jobs
-   Wait: ~4 hours
-   Status: Busy
+## What's New in v0.3.4
 
-Recommendation: Use L40S×4 now
-```
+**Experiment Monitoring:**
+- `expflow status` - Show all experiments and SLURM jobs
+- `expflow list` - List experiments with filtering
+- `expflow logs <exp_id>` - View logs with options
+- `expflow tail <exp_id>` - Follow logs in real-time
+- `expflow cancel <exp_id>` - Cancel running jobs
 
-### Reproducibility
-```
-WARNING: GPU type changed from L40S to H200
-WARNING: Batch config: 96/GPU × 2 = 192 global (Matches)
-WARNING: Consider locking precision mode (bf16)
-```
+**No custom manager scripts needed for basic monitoring!**
+
+See [CHANGELOG.md](CHANGELOG.md) for complete version history.
+
+## Requirements
+
+- Python 3.8+
+- SLURM-based HPC cluster
+- Linux environment
+
+## Use Cases
+
+| Use Case | Status |
+|----------|--------|
+| Image Classification (ResNet, ViT) | ✓ Ready |
+| LLM Fine-tuning (LLaMA, GPT) | ✓ Ready |
+| Reinforcement Learning (PPO, SAC) | ✓ Ready |
+| Computer Vision (Object Detection) | ✓ Ready |
 
 ## Contributing
 
-Contributions welcome! See [`CONTRIBUTING.md`](CONTRIBUTING.md).
+Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-**Share your templates:**
+Share your experiment templates:
 ```bash
 examples/templates/your_usecase.yaml
 ```
 
 ## License
 
-MIT License - see [`LICENSE`](LICENSE)
+MIT License - see [LICENSE](LICENSE)
+
+## Support
+
+- **Issues**: [GitHub Issues](https://github.com/hurryingauto3/expflow-hpc/issues)
+- **Documentation**: [USER_GUIDE.md](USER_GUIDE.md)
+- **NYU HPC**: [NYU HPC Wiki](https://sites.google.com/nyu.edu/nyu-hpc/)
 
 ## Acknowledgments
 
@@ -242,12 +372,8 @@ Built for the NYU HPC deep learning community. Works on any SLURM-based cluster.
 
 **Maintained by:** [Ali Hamza](https://github.com/hurryingauto3)
 
-## Support
-
-- **Issues:** [GitHub Issues](https://github.com/hurryingauto3/expflow-hpc/issues)
-- **Docs:** [Full Documentation](docs/)
-- **NYU HPC:** [NYU HPC Wiki](https://sites.google.com/nyu.edu/nyu-hpc/)
-
 ---
 
 **Stop fighting SLURM. Start doing research.**
+
+For complete documentation, see [USER_GUIDE.md](USER_GUIDE.md).

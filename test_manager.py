@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Simple test script for the experiment manager.
-Copy this to your project directory and run it.
+Simple experiment manager for testing expflow.
+Only handles experiment creation and submission - monitoring is done via expflow CLI.
 """
 
 import argparse
@@ -42,6 +42,7 @@ echo "=============================================="
 echo "Date: $(date)"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $SLURM_NODELIST"
+echo "GPU: $CUDA_VISIBLE_DEVICES"
 echo "=============================================="
 
 # Configuration
@@ -50,10 +51,16 @@ echo "Batch size: {config.get('batch_size', 32)}"
 echo "Learning rate: {config.get('learning_rate', 0.001)}"
 echo "Epochs: {config.get('epochs', 10)}"
 
-# Your training code would go here
-# python train.py --model {config.get('model')} ...
+# Simulate training with some output
+for i in $(seq 1 5); do
+    echo "[Epoch $i/5] Training... loss=0.$((RANDOM % 100))"
+    sleep 2
+done
 
-echo "Training complete"
+echo ""
+echo "=============================================="
+echo "Training complete at $(date)"
+echo "=============================================="
 '''
         return script
 
@@ -64,15 +71,23 @@ echo "Training complete"
 #SBATCH --account={config.get('account', 'default')}
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
-#SBATCH --time=01:00:00
+#SBATCH --time=00:30:00
 #SBATCH --output={self.logs_dir}/output/eval_{config['exp_id']}_%j.out
 #SBATCH --error={self.logs_dir}/error/eval_{config['exp_id']}_%j.err
 
-echo "Evaluating experiment: {config['exp_id']}"
+echo "=============================================="
+echo "Evaluating: {config['exp_id']}"
+echo "=============================================="
 
-# Your evaluation code would go here
+# Simulate evaluation
+echo "Loading checkpoint..."
+sleep 2
+echo "Running evaluation..."
+sleep 3
+echo "Accuracy: 0.$((RANDOM % 100 + 80))"
 
-echo "Evaluation complete"
+echo ""
+echo "Evaluation complete at $(date)"
 '''
         return script
 
@@ -86,15 +101,12 @@ def main():
         description="Simple Test Manager",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Commands:
-  new       Create a new experiment
-  submit    Submit experiment to SLURM
-  list      List all experiments
-  show      Show experiment details
-  status    Show running jobs and experiment status
-  logs      View experiment output logs
-  tail      Follow experiment logs in real-time
-  cancel    Cancel running jobs
+This manager handles experiment creation and submission.
+For monitoring, use the expflow CLI:
+  expflow status              # Show all experiments and jobs
+  expflow logs <exp_id>       # View logs
+  expflow tail <exp_id>       # Follow logs live
+  expflow cancel <exp_id>     # Cancel jobs
         """
     )
     subparsers = parser.add_subparsers(dest="cmd")
@@ -114,33 +126,9 @@ Commands:
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--train-only", action="store_true")
 
-    # list
-    subparsers.add_parser("list", help="List experiments")
-
-    # show
-    p = subparsers.add_parser("show", help="Show experiment details")
+    # show (for viewing config before submit)
+    p = subparsers.add_parser("show", help="Show experiment config")
     p.add_argument("exp_id")
-
-    # status - NEW
-    subparsers.add_parser("status", help="Show running jobs and experiment status")
-
-    # logs - NEW
-    p = subparsers.add_parser("logs", help="View experiment logs")
-    p.add_argument("exp_id")
-    p.add_argument("--type", choices=["train", "eval"], default="train", help="Log type")
-    p.add_argument("--lines", "-n", type=int, default=50, help="Number of lines to show")
-    p.add_argument("--errors", "-e", action="store_true", help="Show error log instead")
-
-    # tail - NEW
-    p = subparsers.add_parser("tail", help="Follow experiment logs in real-time")
-    p.add_argument("exp_id")
-    p.add_argument("--type", choices=["train", "eval"], default="train", help="Log type")
-    p.add_argument("--errors", "-e", action="store_true", help="Follow error log instead")
-
-    # cancel - NEW
-    p = subparsers.add_parser("cancel", help="Cancel running jobs")
-    p.add_argument("exp_id")
-    p.add_argument("--type", choices=["train", "eval"], help="Cancel specific job type")
 
     args = parser.parse_args()
 
@@ -175,23 +163,8 @@ Commands:
             train_only=args.train_only
         )
 
-    elif args.cmd == "list":
-        manager.list_experiments()
-
     elif args.cmd == "show":
         manager.show_experiment(args.exp_id)
-
-    elif args.cmd == "status":
-        manager.status()
-
-    elif args.cmd == "logs":
-        manager.logs(args.exp_id, log_type=args.type, lines=args.lines, errors=args.errors)
-
-    elif args.cmd == "tail":
-        manager.tail_logs(args.exp_id, log_type=args.type, errors=args.errors)
-
-    elif args.cmd == "cancel":
-        manager.cancel(args.exp_id, job_type=args.type)
 
 
 if __name__ == "__main__":
