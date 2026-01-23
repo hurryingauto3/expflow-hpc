@@ -458,3 +458,210 @@ class BaseExperimentManager(ABC):
         df = pd.DataFrame(records)
         df.to_csv(output_file, index=False)
         print(f" Exported {len(records)} experiments to {output_file}")
+
+    def _get_slurm_jobs(self) -> Dict[str, Dict[str, str]]:
+        """Get current SLURM jobs for this user"""
+        try:
+            result = subprocess.run(
+                ["squeue", "-u", os.environ.get("USER", ""), "-h",
+                 "-o", "%.18i %.9P %.50j %.8T %.10M %.6D %R"],
+                capture_output=True, text=True
+            )
+            jobs = {}
+            for line in result.stdout.strip().split("\n"):
+                if not line.strip():
+                    continue
+                parts = line.split()
+                if len(parts) >= 4:
+                    job_id = parts[0].strip()
+                    jobs[job_id] = {
+                        "job_id": job_id,
+                        "partition": parts[1].strip(),
+                        "name": parts[2].strip(),
+                        "state": parts[3].strip(),
+                        "time": parts[4].strip() if len(parts) > 4 else "",
+                        "nodes": parts[5].strip() if len(parts) > 5 else "",
+                        "nodelist": parts[6].strip() if len(parts) > 6 else ""
+                    }
+            return jobs
+        except Exception:
+            return {}
+
+    def _find_log_file(self, exp_id: str, log_type: str = "train") -> Optional[Path]:
+        """Find the most recent log file for an experiment"""
+        if log_type == "train":
+            pattern = f"train_{exp_id}_*.out"
+        else:
+            pattern = f"eval_{exp_id}_*.out"
+
+        log_dir = self.logs_dir / "output"
+        matches = sorted(log_dir.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+        return matches[0] if matches else None
+
+    def _find_error_file(self, exp_id: str, log_type: str = "train") -> Optional[Path]:
+        """Find the most recent error file for an experiment"""
+        if log_type == "train":
+            pattern = f"train_{exp_id}_*.err"
+        else:
+            pattern = f"eval_{exp_id}_*.err"
+
+        log_dir = self.logs_dir / "error"
+        matches = sorted(log_dir.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+        return matches[0] if matches else None
+
+    def status(self):
+        """Show status of all experiments with SLURM job info"""
+        slurm_jobs = self._get_slurm_jobs()
+
+        # Build job_id to experiment mapping
+        job_to_exp = {}
+        for exp_id, meta in self.metadata.items():
+            if meta.get("train_job_id"):
+                job_to_exp[meta["train_job_id"]] = (exp_id, "train")
+            if meta.get("eval_job_id"):
+                job_to_exp[meta["eval_job_id"]] = (exp_id, "eval")
+
+        print(f"\n{'='*80}")
+        print("Experiment Status")
+        print(f"{'='*80}")
+
+        # Show running/pending jobs
+        active_jobs = []
+        for job_id, job_info in slurm_jobs.items():
+            if job_id in job_to_exp:
+                exp_id, job_type = job_to_exp[job_id]
+                active_jobs.append({
+                    "exp_id": exp_id,
+                    "job_type": job_type,
+                    "job_id": job_id,
+                    **job_info
+                })
+
+        if active_jobs:
+            print(f"\nActive Jobs ({len(active_jobs)}):")
+            print(f"{'Experiment':<15} {'Type':<6} {'JobID':<10} {'State':<10} {'Time':<12} {'Node'}")
+            print("-" * 80)
+            for job in active_jobs:
+                print(f"{job['exp_id']:<15} {job['job_type']:<6} {job['job_id']:<10} "
+                      f"{job['state']:<10} {job['time']:<12} {job.get('nodelist', '')}")
+        else:
+            print("\nNo active jobs")
+
+        # Show recent experiments
+        print(f"\nRecent Experiments:")
+        print(f"{'ID':<15} {'Status':<12} {'Train Job':<12} {'Eval Job':<12} {'Description'}")
+        print("-" * 80)
+
+        sorted_exps = sorted(
+            self.metadata.items(),
+            key=lambda x: x[1].get("config", {}).get("created_at", ""),
+            reverse=True
+        )[:10]
+
+        for exp_id, meta in sorted_exps:
+            config = meta.get("config", {})
+            desc = config.get("description", "")[:30]
+            train_job = meta.get("train_job_id", "-")
+            eval_job = meta.get("eval_job_id", "-")
+            status = meta.get("status", "unknown")
+            print(f"{exp_id:<15} {status:<12} {train_job:<12} {eval_job:<12} {desc}")
+
+        print(f"{'='*80}\n")
+
+    def logs(self, exp_id: str, log_type: str = "train", lines: int = 50, errors: bool = False):
+        """View logs for an experiment"""
+        if exp_id not in self.metadata:
+            print(f"Error: Experiment {exp_id} not found")
+            return
+
+        if errors:
+            log_file = self._find_error_file(exp_id, log_type)
+            file_type = "error"
+        else:
+            log_file = self._find_log_file(exp_id, log_type)
+            file_type = "output"
+
+        if not log_file:
+            print(f"No {file_type} log found for {exp_id} ({log_type})")
+            print(f"  Looked in: {self.logs_dir}/{file_type}/")
+            return
+
+        print(f"\n{'='*70}")
+        print(f"Log: {log_file.name}")
+        print(f"{'='*70}\n")
+
+        try:
+            with open(log_file, 'r') as f:
+                content = f.readlines()
+                if len(content) > lines:
+                    print(f"[Showing last {lines} lines of {len(content)} total]\n")
+                    content = content[-lines:]
+                for line in content:
+                    print(line, end='')
+        except Exception as e:
+            print(f"Error reading log: {e}")
+
+        print(f"\n{'='*70}")
+        print(f"Full log: {log_file}")
+        print(f"{'='*70}\n")
+
+    def tail_logs(self, exp_id: str, log_type: str = "train", errors: bool = False):
+        """Tail logs for an experiment (live follow)"""
+        if exp_id not in self.metadata:
+            print(f"Error: Experiment {exp_id} not found")
+            return
+
+        if errors:
+            log_file = self._find_error_file(exp_id, log_type)
+        else:
+            log_file = self._find_log_file(exp_id, log_type)
+
+        if not log_file:
+            print(f"No log found for {exp_id} ({log_type})")
+            return
+
+        print(f"Tailing: {log_file}")
+        print("Press Ctrl+C to stop\n")
+        print("-" * 70)
+
+        try:
+            subprocess.run(["tail", "-f", str(log_file)])
+        except KeyboardInterrupt:
+            print("\n[Stopped]")
+
+    def cancel(self, exp_id: str, job_type: Optional[str] = None):
+        """Cancel running jobs for an experiment"""
+        if exp_id not in self.metadata:
+            print(f"Error: Experiment {exp_id} not found")
+            return
+
+        meta = self.metadata[exp_id]
+        cancelled = []
+
+        jobs_to_cancel = []
+        if job_type in (None, "train") and meta.get("train_job_id"):
+            jobs_to_cancel.append(("train", meta["train_job_id"]))
+        if job_type in (None, "eval") and meta.get("eval_job_id"):
+            jobs_to_cancel.append(("eval", meta["eval_job_id"]))
+
+        if not jobs_to_cancel:
+            print(f"No jobs to cancel for {exp_id}")
+            return
+
+        for jtype, job_id in jobs_to_cancel:
+            try:
+                result = subprocess.run(
+                    ["scancel", job_id],
+                    capture_output=True, text=True
+                )
+                if result.returncode == 0:
+                    cancelled.append(f"{jtype} ({job_id})")
+                else:
+                    print(f"  Warning: Could not cancel {jtype} job {job_id}")
+            except Exception as e:
+                print(f"  Error cancelling {jtype} job: {e}")
+
+        if cancelled:
+            print(f"Cancelled jobs for {exp_id}: {', '.join(cancelled)}")
+            meta["status"] = "cancelled"
+            self._save_metadata()
