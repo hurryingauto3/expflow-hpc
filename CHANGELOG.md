@@ -76,6 +76,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Professional documentation (no emojis)
 - Clean repository organization
 
+## [0.3.4] - 2026-01-23
+
+### Added
+- **Experiment monitoring commands in CLI**: No longer need custom manager scripts for basic operations
+  - `expflow status` - Show all experiments with SLURM job status (running, pending, completed)
+  - `expflow list` - List experiments with optional status filtering
+  - `expflow logs <exp_id>` - View experiment output logs (last N lines)
+  - `expflow tail <exp_id>` - Follow logs in real-time (like `tail -f`)
+  - `expflow cancel <exp_id>` - Cancel running/pending SLURM jobs
+- **Log viewing options**:
+  - `--type train|eval` - Choose between training and evaluation logs
+  - `-n, --lines` - Number of lines to display (default: 50)
+  - `-e, --errors` - View error logs instead of stdout
+- **BaseExperimentManager methods**: Added `status()`, `logs()`, `tail_logs()`, `cancel()` to base class
+
+### Fixed
+- `expflow template` now creates `experiment_templates/` directory if missing
+
+### Changed
+- Experiment monitoring is now a core CLI feature, not just available through custom managers
+- Users can track experiments without writing any Python code
+
+
 ## [0.3.3] - 2026-01-22
 
 ### Fixed
