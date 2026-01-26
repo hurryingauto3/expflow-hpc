@@ -5,7 +5,7 @@ Lightweight experiment tracking for SLURM-based HPC clusters.
 Auto-detects environment, generates SLURM scripts, tracks experiments.
 """
 
-__version__ = "0.3.4"
+__version__ = "0.4.0"
 
 from .hpcexp_core import BaseExperimentManager, BaseExperimentConfig, ExperimentMetadata
 from .hpc_config import (
@@ -17,6 +17,7 @@ from .hpc_config import (
 from .resource_advisor import ResourceAdvisor, PartitionInfo, ResourceRecommendation
 from .partition_validator import PartitionValidator, validate_job_config
 from .interactive_init import interactive_init, quick_init
+from .cache_builder import BaseCacheBuilder, CacheConfig
 
 __all__ = [
     "BaseExperimentManager",
@@ -33,4 +34,6 @@ __all__ = [
     "validate_job_config",
     "interactive_init",
     "quick_init",
+    "BaseCacheBuilder",
+    "CacheConfig",
 ]

@@ -5,6 +5,55 @@ All notable changes to ExpFlow will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-01-26
+
+### Added
+- **Cache Building Framework**: Generic infrastructure for building and managing HPC caches
+  - `BaseCacheBuilder`: Abstract base class for project-specific cache builders
+  - `CacheConfig`: Dataclass for cache configuration
+  - 3-stage pipeline: Build → SquashFS → Cleanup
+  - Automatic job dependency chaining with SLURM
+  - SquashFS compression for inode optimization (millions of files → 1 file)
+  - Support for multiple cache types (training, metric, validation, etc.)
+  - Container (Apptainer/Singularity) support for cache operations
+
+- **NAVSIM Cache Builder Example**: Complete implementation for NAVSIM experiments
+  - Training cache: Dataset feature extraction with I-JEPA encoder
+  - Metric cache: PDM score metric precomputation
+  - Support for multi-camera configurations (3-cam, 6-cam)
+  - CPU-optimized parallel processing with Ray workers
+  - Example CLI: `navsim_cache_builder.py`
+
+- **Cache Management Commands**:
+  - `create_cache_config()`: Define new cache configuration
+  - `build_cache()`: Submit cache building job
+  - `squashfs_cache()`: Compress cache to SquashFS
+  - `cleanup_cache()`: Remove original directory after compression
+  - `build_cache_pipeline()`: Run full pipeline with dependencies
+  - `list_caches()`: List all caches with status
+  - `show_cache()`: Show detailed cache information
+
+- **Documentation**:
+  - Cache building section in USER_GUIDE.md
+  - `examples/CACHE_BUILDER_README.md`: Complete cache building guide
+  - Example implementation with NAVSIM use cases
+  - Integration patterns with experiment managers
+
+### Features
+- Automatic SquashFS overlay generation for read-only cache mounting
+- Support for custom cache parameters via `cache_params` dict
+- Configurable SquashFS compression (zstd, gzip, etc.)
+- Dry-run mode for all cache operations
+- Job dependency management (wait_for parameter)
+- Container-based cache operations with Apptainer
+
+### Use Cases
+- Training dataset preprocessing and caching
+- Metric precomputation for faster evaluation
+- Feature extraction pipelines
+- Large-scale data transformations
+- Inode quota optimization on HPC
+
 ## [0.2.0] - 2026-01-22
 
 ### Added

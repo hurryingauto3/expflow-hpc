@@ -11,9 +11,10 @@ Complete guide to using ExpFlow for HPC experiment management.
 5. [Monitoring Experiments](#monitoring-experiments)
 6. [Resource Management](#resource-management)
 7. [Partition and Account Management](#partition-and-account-management)
-8. [Creating Custom Managers](#creating-custom-managers)
-9. [Advanced Usage](#advanced-usage)
-10. [Troubleshooting](#troubleshooting)
+8. [Cache Building](#cache-building)
+9. [Creating Custom Managers](#creating-custom-managers)
+10. [Advanced Usage](#advanced-usage)
+11. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -472,6 +473,322 @@ ExpFlow uses `sbatch --test-only` to validate partition-account combinations wit
 - `*_general`: General purpose, broadest access
 - `*_tandon`, `*_courant`, etc.: School/department specific
 - `*_advanced`: May require special access or quotas
+
+---
+
+## Cache Building
+
+ExpFlow provides a generic framework for building and managing data caches on HPC. This is useful for preprocessing datasets, extracting features, or precomputing metrics.
+
+### Cache Building Pipeline
+
+The cache building process has 3 stages:
+
+1. **Build Cache**: Extract/preprocess data (CPU-intensive, parallel)
+2. **SquashFS Compression**: Convert to compressed read-only filesystem (saves inodes)
+3. **Cleanup**: Remove original directory after verifying compression
+
+### Why SquashFS?
+
+HPC filesystems have inode limits. Large caches with millions of files can exhaust your quota. SquashFS solves this:
+- Converts directory with 1M files → single `.sqsh` file (1 inode)
+- Read-only filesystem, mounted at runtime
+- Compression reduces storage (typically 20-40% of original size)
+- No performance penalty for training (mounted directly)
+
+### Using the Cache Builder
+
+#### Step 1: Create Your Cache Builder
+
+Extend `BaseCacheBuilder` to implement project-specific cache generation:
+
+```python
+from expflow import BaseCacheBuilder, CacheConfig
+
+class MyCacheBuilder(BaseCacheBuilder):
+    """Custom cache builder for my project"""
+
+    def _generate_cache_build_script(self, config: CacheConfig) -> str:
+        """Generate the cache building SLURM script"""
+
+        cache_type = config.cache_type
+        cache_dir = config.cache_output_dir
+
+        if cache_type == "training":
+            return self._generate_training_cache_script(config)
+        elif cache_type == "validation":
+            return self._generate_validation_cache_script(config)
+        else:
+            raise ValueError(f"Unknown cache type: {cache_type}")
+
+    def _generate_training_cache_script(self, config: CacheConfig) -> str:
+        """Generate training cache building script"""
+
+        # Extract project-specific parameters
+        dataset = config.cache_params.get("dataset", "imagenet")
+        image_size = config.cache_params.get("image_size", 224)
+
+        script = f'''#!/bin/bash
+#SBATCH --job-name=cache_{config.cache_name}
+#SBATCH --partition={config.partition}
+#SBATCH --cpus-per-task={config.num_cpus}
+#SBATCH --mem={config.memory}
+#SBATCH --time={config.time_limit}
+
+# Your cache building command
+python preprocess_dataset.py \\
+    --dataset {dataset} \\
+    --output {config.cache_output_dir} \\
+    --image-size {image_size} \\
+    --workers {config.num_workers}
+'''
+        return script
+
+    def get_cache_script_command(self, config: CacheConfig) -> str:
+        """Get Python command for cache building (for documentation)"""
+        dataset = config.cache_params.get("dataset", "imagenet")
+        return f"python preprocess_dataset.py --dataset {dataset}"
+```
+
+#### Step 2: Create Cache Configuration
+
+```python
+builder = MyCacheBuilder()
+
+# Create cache config
+builder.create_cache_config(
+    cache_name="imagenet_train_224",
+    cache_type="training",
+    description="ImageNet training set preprocessed to 224x224",
+    partition="cpu",  # Usually CPU for caching
+    num_cpus=128,
+    memory="256G",
+    time_limit="24:00:00",
+    num_workers=96,
+    cache_params={
+        "dataset": "imagenet",
+        "split": "train",
+        "image_size": 224
+    }
+)
+```
+
+#### Step 3: Run Cache Pipeline
+
+```bash
+# Option 1: Run full pipeline (recommended)
+# Automatically chains: build → squashfs → cleanup
+python my_cache_builder.py pipeline imagenet_train_224
+
+# Option 2: Run steps manually
+python my_cache_builder.py build imagenet_train_224
+python my_cache_builder.py squashfs imagenet_train_224  # Waits for build
+python my_cache_builder.py cleanup imagenet_train_224   # Waits for squashfs
+
+# Dry run to preview scripts
+python my_cache_builder.py pipeline imagenet_train_224 --dry-run
+```
+
+#### Step 4: Use Cache in Training
+
+Mount the SquashFS overlay in your training script:
+
+```bash
+#!/bin/bash
+#SBATCH --gres=gpu:4
+
+# Both cache directory and overlay are under experiments/cache/
+CACHE_DIR="/scratch/USER/experiments/cache/imagenet_train_224"
+CACHE_SQSH="/scratch/USER/experiments/cache/overlays/imagenet_train_224.sqsh"
+
+# Run with overlay mounted
+apptainer exec \\
+    --nv \\
+    --bind ${CACHE_SQSH}:${CACHE_DIR}:image-src=/ \\
+    container.sif \\
+    python train.py --data ${CACHE_DIR}
+```
+
+### Complete Example: NAVSIM Cache Builder
+
+See `examples/navsim_cache_builder.py` for a complete implementation:
+
+```python
+from expflow import BaseCacheBuilder, CacheConfig
+
+class NavsimCacheBuilder(BaseCacheBuilder):
+    """Builds training and metric caches for NAVSIM experiments"""
+
+    def _generate_cache_build_script(self, config: CacheConfig) -> str:
+        if config.cache_type == "training":
+            return self._generate_training_cache_script(config)
+        elif config.cache_type == "metric":
+            return self._generate_metric_cache_script(config)
+
+    def _generate_training_cache_script(self, config: CacheConfig) -> str:
+        agent = config.cache_params["agent"]
+        split = config.cache_params["train_split"]
+
+        return f'''#!/bin/bash
+# SLURM directives...
+
+python run_dataset_caching.py \\
+    agent={agent} \\
+    train_test_split={split} \\
+    cache_path={config.cache_output_dir} \\
+    worker.threads_per_node={config.num_workers}
+'''
+
+    # ... metric cache implementation
+```
+
+**Usage:**
+
+```bash
+# Create training cache
+python navsim_cache_builder.py new training_cache_v4_6cams \\
+    --type training \\
+    --agent ijepa_planning_agent_v4 \\
+    --num-cams 6 \\
+    --description "6-camera training cache"
+
+# Run pipeline
+python navsim_cache_builder.py pipeline training_cache_v4_6cams
+
+# Create metric cache
+python navsim_cache_builder.py new navhard_metric_cache \\
+    --type metric \\
+    --eval-split navhard_two_stage \\
+    --description "Metric cache for navhard eval"
+
+python navsim_cache_builder.py pipeline navhard_metric_cache
+
+# List caches
+python navsim_cache_builder.py list
+python navsim_cache_builder.py show training_cache_v4_6cams
+```
+
+### Cache Management Commands
+
+```bash
+# List all caches
+python cache_builder.py list
+
+# Filter by type
+python cache_builder.py list --type training
+
+# Show cache details
+python cache_builder.py show cache_name
+
+# Build only (no compression)
+python cache_builder.py build cache_name
+
+# Compress existing cache
+python cache_builder.py squashfs cache_name
+
+# Cleanup after compression
+python cache_builder.py cleanup cache_name
+```
+
+### Cache Configuration Options
+
+```python
+CacheConfig(
+    cache_name="my_cache",           # Unique identifier
+    cache_type="training",           # Project-specific type
+    description="Description",       # Human-readable description
+
+    # Paths (auto-detected, usually don't need to override)
+    cache_output_dir="/scratch/USER/experiments/cache/my_cache",
+    overlay_output_dir="/scratch/USER/experiments/cache/overlays",
+
+    # Resources (for cache building)
+    partition="cpu",                 # Usually CPU
+    account="my_account",
+    num_cpus=128,
+    memory="256G",
+    time_limit="48:00:00",
+
+    # Cache parameters
+    num_workers=96,                  # Parallel workers
+    force_rebuild=True,              # Rebuild existing cache
+    cache_params={                   # Project-specific params
+        "dataset": "imagenet",
+        "split": "train",
+        "image_size": 224
+    },
+
+    # SquashFS options
+    squashfs_compression="zstd",     # Compression algorithm
+    squashfs_block_size=1048576,     # 1MB blocks
+    squashfs_processors=32,          # Compression threads
+
+    # Container (if needed)
+    container_image="/path/to/container.sif",
+    use_container=False
+)
+```
+
+### Integrating Cache Building with Experiments
+
+You can integrate cache building into your experiment manager:
+
+```python
+from expflow import BaseExperimentManager, BaseCacheBuilder
+
+class MyExperimentManager(BaseExperimentManager):
+    def __init__(self, hpc_config):
+        super().__init__(hpc_config)
+        # Add cache builder
+        self.cache_builder = MyCacheBuilder(hpc_config)
+
+    def ensure_cache(self, cache_name, **cache_params):
+        """Ensure cache exists, build if needed"""
+        if cache_name not in self.cache_builder.cache_metadata:
+            self.cache_builder.create_cache_config(
+                cache_name=cache_name,
+                **cache_params
+            )
+            self.cache_builder.build_cache_pipeline(cache_name)
+            return False  # Cache being built
+        return True  # Cache ready
+```
+
+### Best Practices
+
+1. **Use CPU partitions** for cache building (no GPU needed)
+2. **Test on small subset** before full cache build
+3. **Verify SquashFS** works in training before cleanup
+4. **Document cache versions** in descriptions
+5. **Chain jobs** with `--dependency` to automate pipeline
+6. **Monitor inode usage**: `lfs quota -h /scratch`
+
+### Troubleshooting Cache Building
+
+**Problem: Cache build fails**
+```bash
+# Check logs
+tail -f experiments/logs/caching/build_CACHE_NAME_*.err
+
+# Test on single worker
+python cache_builder.py new test_cache --num-workers 1
+```
+
+**Problem: SquashFS mount fails**
+```bash
+# Verify file exists
+ls -lh /scratch/USER/experiments/cache/overlays/CACHE_NAME.sqsh
+
+# Test mount manually
+apptainer exec --bind CACHE.sqsh:/mount/point:image-src=/ container.sif ls /mount/point
+```
+
+**Problem: Training can't read cache**
+```bash
+# Check bind mount syntax
+# Correct: --bind overlay.sqsh:/cache/path:image-src=/
+# Wrong: --bind overlay.sqsh:/cache/path  (missing :image-src=/)
+```
 
 ---
 
