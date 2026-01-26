@@ -16,7 +16,7 @@ This document explains the ExpFlow documentation structure.
 
 **When to use**: First time users, GitHub visitors, quick reference
 
-### 2. USER_GUIDE.md (20K) - Complete Guide
+### 2. USER_GUIDE.md (38K) - Complete Guide
 **Purpose**: Comprehensive user documentation
 
 **Contents**:
@@ -26,6 +26,8 @@ This document explains the ExpFlow documentation structure.
 - Experiment management workflows
 - Resource and partition management
 - Creating custom managers tutorial
+- Cache building framework (v0.4.0)
+- Results harvesting framework (v0.4.0)
 - Advanced usage patterns
 - Troubleshooting guide
 
@@ -44,7 +46,7 @@ This document explains the ExpFlow documentation structure.
 
 **When to use**: Daily usage, command lookup, quick reminders
 
-### 4. CHANGELOG.md (8.3K) - Version History
+### 4. CHANGELOG.md (12K) - Version History
 **Purpose**: Track changes across versions
 
 **Contents**:
@@ -66,15 +68,41 @@ This document explains the ExpFlow documentation structure.
 
 **When to use**: Contributing code or documentation
 
+### 6. CLAUDE.md (10K) - Developer Guide
+**Purpose**: Context for AI assistants and developers
+
+**Contents**:
+- Project architecture and design decisions
+- Development commands and testing
+- Key files and their purposes
+- NYU HPC specifics
+- Code style requirements
+- Common tasks for developers
+
+**When to use**: Development, contributing, understanding codebase
+
 ## Removed Files (Consolidated)
 
 The following files were **removed** to reduce documentation clutter:
 
+**Root-level consolidation:**
 - ~~INTERACTIVE_INIT_GUIDE.md~~ → Merged into USER_GUIDE.md
 - ~~PARTITION_VALIDATOR_USAGE.md~~ → Merged into USER_GUIDE.md
 - ~~PROJECT_STRUCTURE.md~~ → Unnecessary
 - ~~TESTING.md~~ → Merged into CONTRIBUTING.md
-- ~~CLAUDE.md~~ → Development-specific, not user-facing
+
+**docs/ directory removal (all outdated):**
+- ~~docs/user-guide.md~~ → Replaced by root USER_GUIDE.md (3x larger, up-to-date)
+- ~~docs/quick-reference.md~~ → Replaced by root QUICK_REFERENCE.md
+- ~~docs/getting-started.md~~ → Content merged into USER_GUIDE.md
+- ~~docs/custom-managers.md~~ → Content in USER_GUIDE.md "Creating Custom Managers"
+- ~~docs/cli-reference.md~~ → Replaced by QUICK_REFERENCE.md
+- ~~docs/api-reference.md~~ → Outdated (missing v0.4.0 classes)
+- ~~docs/migration-guide.md~~ → NavSim-specific, no longer relevant
+- ~~docs/partition-access-guide.md~~ → Content in USER_GUIDE.md partition section
+- ~~docs/README.md~~ → Index for outdated docs
+
+**Note**: All removed docs/ files backed up to `.archive/docs_old_YYYYMMDD/`
 
 ## Documentation Flow
 
@@ -89,9 +117,10 @@ The following files were **removed** to reduce documentation clutter:
 - **USER_GUIDE.md** for advanced features
 - **CHANGELOG.md** for updates
 
-### Contributors
+### Contributors & Developers
 - **CONTRIBUTING.md** for guidelines
 - **CHANGELOG.md** to understand history
+- **CLAUDE.md** for architecture and design decisions
 
 ## Finding Information
 
@@ -136,14 +165,17 @@ When adding features:
 ## File Sizes Summary
 
 ```
-README.md          9.4K   (Quick overview)
-USER_GUIDE.md       20K   (Complete guide)
-QUICK_REFERENCE.md 4.6K   (Command cheat sheet)
-CHANGELOG.md       8.3K   (Version history)
-CONTRIBUTING.md    2.4K   (For contributors)
+README.md           9.4K   (Quick overview)
+USER_GUIDE.md        38K   (Complete guide with v0.4.0 features)
+QUICK_REFERENCE.md  4.6K   (Command cheat sheet)
+CHANGELOG.md         12K   (Version history through v0.4.0)
+CONTRIBUTING.md     2.4K   (For contributors)
+CLAUDE.md            10K   (Developer guide)
 ──────────────────────────
-Total:            44.7K   (Was 70K+ before consolidation)
+Total:              76.4K   (Comprehensive, no duplication)
 ```
+
+**Previous docs/ directory**: ~60K of outdated, redundant content (removed)
 
 ## Documentation Principles
 
