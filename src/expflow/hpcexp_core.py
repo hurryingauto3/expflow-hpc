@@ -68,6 +68,11 @@ class ExperimentMetadata:
     eval_script_path: Optional[str] = None
     run_id: Optional[str] = None
     results: Dict[str, Any] = field(default_factory=dict)
+    # Resume tracking
+    resume_from_exp_id: Optional[str] = None
+    resume_checkpoint_path: Optional[str] = None
+    resume_epoch: Optional[int] = None
+    resume_count: int = 0  # Number of times this experiment has been resumed
 
 
 # =============================================================================
@@ -513,6 +518,196 @@ class BaseExperimentManager(ABC):
         log_dir = self.logs_dir / "error"
         matches = sorted(log_dir.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
         return matches[0] if matches else None
+
+    def _find_latest_checkpoint(self, exp_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Find the latest checkpoint for an experiment
+
+        Returns:
+            Dictionary with checkpoint info: {path, epoch, type} or None if not found
+        """
+        checkpoint_dir = self.checkpoints_dir / exp_id
+
+        if not checkpoint_dir.exists():
+            return None
+
+        # Look for common checkpoint patterns
+        checkpoint_patterns = [
+            "checkpoint_best.pth",
+            "best_checkpoint.pth",
+            "model_best.pth",
+            "checkpoint_latest.pth",
+            "latest_checkpoint.pth",
+            "checkpoint_epoch_*.pth",
+            "checkpoint_*.pth",
+            "epoch_*.pth",
+            "*.ckpt",  # PyTorch Lightning format
+        ]
+
+        best_checkpoint = None
+        latest_checkpoint = None
+
+        for pattern in checkpoint_patterns:
+            matches = list(checkpoint_dir.glob(pattern))
+
+            if not matches:
+                continue
+
+            # Check for "best" checkpoints first
+            if "best" in pattern.lower():
+                if matches:
+                    best_checkpoint = max(matches, key=lambda p: p.stat().st_mtime)
+                    return {
+                        "path": str(best_checkpoint),
+                        "epoch": self._extract_epoch_from_checkpoint(best_checkpoint),
+                        "type": "best"
+                    }
+
+            # Otherwise track the latest checkpoint by modification time
+            for match in matches:
+                if latest_checkpoint is None or match.stat().st_mtime > latest_checkpoint.stat().st_mtime:
+                    latest_checkpoint = match
+
+        if latest_checkpoint:
+            return {
+                "path": str(latest_checkpoint),
+                "epoch": self._extract_epoch_from_checkpoint(latest_checkpoint),
+                "type": "latest"
+            }
+
+        return None
+
+    def _extract_epoch_from_checkpoint(self, checkpoint_path: Path) -> Optional[int]:
+        """Extract epoch number from checkpoint filename"""
+        import re
+
+        # Try to extract epoch from filename
+        patterns = [
+            r"epoch_(\d+)",
+            r"epoch(\d+)",
+            r"checkpoint_(\d+)",
+            r"step_(\d+)",
+        ]
+
+        filename = checkpoint_path.stem
+        for pattern in patterns:
+            match = re.search(pattern, filename, re.IGNORECASE)
+            if match:
+                return int(match.group(1))
+
+        return None
+
+    def resume_experiment(
+        self,
+        source_exp_id: str,
+        new_exp_id: Optional[str] = None,
+        checkpoint_path: Optional[str] = None,
+        **kwargs
+    ) -> str:
+        """
+        Create a new experiment that resumes from a previous experiment's checkpoint
+
+        Args:
+            source_exp_id: Experiment ID to resume from
+            new_exp_id: ID for the new resumed experiment (auto-generated if None)
+            checkpoint_path: Specific checkpoint path (auto-detects latest if None)
+            **kwargs: Additional config overrides
+
+        Returns:
+            The new experiment ID
+        """
+        # Validate source experiment exists
+        if source_exp_id not in self.metadata:
+            print(f"Error: Source experiment {source_exp_id} not found")
+            sys.exit(1)
+
+        source_meta = self.metadata[source_exp_id]
+        source_config = source_meta.get("config", {})
+
+        # Find checkpoint
+        if checkpoint_path is None:
+            checkpoint_info = self._find_latest_checkpoint(source_exp_id)
+            if checkpoint_info is None:
+                print(f"Error: No checkpoint found for experiment {source_exp_id}")
+                print(f"  Looked in: {self.checkpoints_dir / source_exp_id}")
+                sys.exit(1)
+            checkpoint_path = checkpoint_info["path"]
+            resume_epoch = checkpoint_info["epoch"]
+            checkpoint_type = checkpoint_info["type"]
+            print(f"Found {checkpoint_type} checkpoint: {Path(checkpoint_path).name}")
+            if resume_epoch is not None:
+                print(f"  Resuming from epoch: {resume_epoch}")
+        else:
+            # Validate provided checkpoint exists
+            if not Path(checkpoint_path).exists():
+                print(f"Error: Checkpoint not found: {checkpoint_path}")
+                sys.exit(1)
+            resume_epoch = self._extract_epoch_from_checkpoint(Path(checkpoint_path))
+            checkpoint_type = "custom"
+
+        # Generate new experiment ID if not provided
+        if new_exp_id is None:
+            # Get resume count for source experiment
+            resume_count = source_meta.get("resume_count", 0) + 1
+            new_exp_id = f"{source_exp_id}_resume{resume_count}"
+
+            # Handle case where resumed experiment was itself resumed
+            if source_meta.get("resume_from_exp_id"):
+                original_exp_id = source_meta["resume_from_exp_id"]
+                new_exp_id = f"{original_exp_id}_resume{resume_count}"
+
+        # Check if new experiment ID already exists
+        if new_exp_id in self.metadata:
+            print(f"Error: Experiment {new_exp_id} already exists")
+            print(f"  Specify a different new_exp_id or delete the existing experiment")
+            sys.exit(1)
+
+        # Create new config based on source config
+        new_config = {
+            **source_config,
+            "exp_id": new_exp_id,
+            "description": f"Resume from {source_exp_id}: {source_config.get('description', '')}",
+            "created_at": datetime.now().isoformat(),
+            "resume_from_exp_id": source_exp_id,
+            "resume_checkpoint_path": checkpoint_path,
+            "resume_epoch": resume_epoch,
+            **self._get_git_info(),
+            **kwargs  # Allow user to override any config values
+        }
+
+        # Save new config
+        config_path = self.configs_dir / f"{new_exp_id}.yaml"
+        with open(config_path, 'w') as f:
+            yaml.dump(new_config, f, default_flow_style=False, sort_keys=False)
+
+        # Create metadata entry
+        self.metadata[new_exp_id] = {
+            "exp_id": new_exp_id,
+            "config": new_config,
+            "status": "created",
+            "train_script_path": None,
+            "eval_script_path": None,
+            "run_id": None,
+            "results": {},
+            "resume_from_exp_id": source_exp_id,
+            "resume_checkpoint_path": checkpoint_path,
+            "resume_epoch": resume_epoch,
+            "resume_count": 0
+        }
+
+        # Update source experiment's resume count
+        source_meta["resume_count"] = source_meta.get("resume_count", 0) + 1
+
+        self._save_metadata()
+
+        print(f"\n Created resume experiment: {new_exp_id}")
+        print(f"  Config: {config_path}")
+        print(f"  Resuming from: {source_exp_id}")
+        print(f"  Checkpoint: {Path(checkpoint_path).name}")
+        if resume_epoch is not None:
+            print(f"  Starting epoch: {resume_epoch + 1}")
+
+        return new_exp_id
 
     def status(self):
         """Show status of all experiments with SLURM job info"""

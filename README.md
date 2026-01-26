@@ -34,6 +34,7 @@ expflow logs exp001
 - **Auto-Detection**: Automatically detects username, scratch directory, SLURM accounts, and partition access
 - **Interactive Setup**: Menu-based initialization with intelligent account and GPU recommendations
 - **Experiment Monitoring**: Built-in commands for status tracking, log viewing, and job management
+- **Checkpoint Resumption**: Automatic checkpoint detection and experiment resume support (v0.6.0+)
 - **Experiment Pruning**: Clean up duplicate runs and invalid experiments with safe archival
 - **Resource Advisor**: Real-time GPU availability and smart recommendations
 - **Partition Validation**: Automatic partition-account compatibility testing
@@ -321,15 +322,20 @@ python my_manager.py export results.csv
 - **[USER_GUIDE.md](USER_GUIDE.md)** - Complete user guide with examples
 - **[CHANGELOG.md](CHANGELOG.md)** - Version history and updates
 
-## What's New in v0.5.0
+## What's New in v0.6.0
 
-**Experiment Pruning:**
+**Checkpoint Resumption:**
+- `manager.resume_experiment()` - Automatically resume from checkpoints
+- Smart checkpoint detection (best, latest, epoch-specific)
+- Support for PyTorch (.pth), PyTorch Lightning (.ckpt) formats
+- Epoch tracking and resume metadata
+- Config inheritance with overrides
+- Perfect for recovering from time limits or continuing training
+
+**Previous (v0.5.0) - Experiment Pruning:**
 - `expflow prune` - Clean up duplicate runs and invalid experiments
-- `--dry-run` - Preview what would be deleted before committing
-- `--keep N` - Keep N most recent runs per experiment
 - Safe archival to `.archive/` instead of permanent deletion
 - Typical savings: 10-25 GB on systems with many duplicate runs
-- Perfect for managing disk space on HPC scratch storage
 
 See [CHANGELOG.md](CHANGELOG.md) for complete version history.
 

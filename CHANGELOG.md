@@ -5,6 +5,60 @@ All notable changes to ExpFlow will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-01-26
+
+### Added
+- **Experiment Resume Support**: Framework-level checkpoint resumption capability
+  - `BaseExperimentManager.resume_experiment()`: Create new experiment that resumes from checkpoint
+  - `_find_latest_checkpoint()`: Automatic checkpoint detection with pattern matching
+  - `_extract_epoch_from_checkpoint()`: Smart epoch extraction from checkpoint filenames
+  - Support for multiple checkpoint formats: PyTorch (.pth, .pt), PyTorch Lightning (.ckpt)
+  - Automatic "best" vs "latest" checkpoint detection
+  - Resume tracking in metadata: `resume_from_exp_id`, `resume_checkpoint_path`, `resume_epoch`
+  - Auto-generated resume experiment IDs: `{original_exp_id}_resume{N}`
+  - Resume count tracking to prevent ID collisions
+
+- **Resume Metadata Fields**:
+  - `ExperimentMetadata.resume_from_exp_id`: Source experiment being resumed
+  - `ExperimentMetadata.resume_checkpoint_path`: Path to checkpoint file
+  - `ExperimentMetadata.resume_epoch`: Epoch number being resumed from
+  - `ExperimentMetadata.resume_count`: Number of times experiment has been resumed
+
+- **Checkpoint Detection Patterns**:
+  - Best checkpoints: `checkpoint_best.pth`, `best_checkpoint.pth`, `model_best.pth`
+  - Latest checkpoints: `checkpoint_latest.pth`, `latest_checkpoint.pth`
+  - Epoch-specific: `checkpoint_epoch_*.pth`, `epoch_*.pth`
+  - PyTorch Lightning: `*.ckpt`
+  - Custom checkpoints: User can specify exact path
+
+### Features
+- **Automatic checkpoint discovery**: Searches `checkpoints/{exp_id}/` directory
+- **Smart checkpoint selection**: Prefers "best" checkpoints over "latest"
+- **Epoch tracking**: Extracts epoch number from filenames for accurate resumption
+- **Config inheritance**: Resumed experiments inherit source config with overrides
+- **Git tracking**: Captures git state at resume time for reproducibility
+- **Resume chain tracking**: Handles experiments resumed from resumed experiments
+- **Collision prevention**: Auto-increments resume count if ID exists
+- **User overrides**: Allow config modifications during resume (learning rate, batch size, etc.)
+
+### Use Cases
+- Resume training from failed/interrupted SLURM jobs
+- Continue experiments with different hyperparameters
+- Extend training beyond original epoch count
+- Test different evaluation strategies on same checkpoint
+- Recover from node failures or time limit exceeded errors
+- Fine-tune from intermediate checkpoints
+
+### Changed
+- `ExperimentMetadata` dataclass extended with resume fields
+- `BaseExperimentManager` now includes checkpoint discovery methods
+- Package version bumped to 0.6.0 in setup.py and __init__.py
+
+### Documentation
+- USER_GUIDE.md updated with "Resuming Experiments" section
+- Example implementation in navsim_manager.py
+- API documentation for resume methods
+
 ## [0.5.0] - 2026-01-26
 
 ### Added

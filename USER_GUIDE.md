@@ -352,6 +352,222 @@ expflow cancel exp001 --type train
 expflow cancel exp001 --type eval
 ```
 
+### Resuming Experiments
+
+**New in v0.6.0**: ExpFlow now includes built-in checkpoint resumption support at the framework level.
+
+#### Automatic Resume from Latest Checkpoint
+
+```python
+# In your custom manager script
+manager.resume_experiment(
+    source_exp_id="exp001",
+    new_exp_id="exp001_resume1"  # Optional, auto-generated if not provided
+)
+```
+
+This will:
+1. Find the latest checkpoint in `checkpoints/exp001/`
+2. Prefer "best" checkpoints (`checkpoint_best.pth`, `model_best.pth`)
+3. Fall back to latest checkpoint by modification time
+4. Extract epoch number from filename
+5. Create new experiment config with resume metadata
+6. Inherit all settings from source experiment
+
+#### Resume with Specific Checkpoint
+
+```python
+# Specify exact checkpoint path
+manager.resume_experiment(
+    source_exp_id="exp001",
+    checkpoint_path="/scratch/USER/project/checkpoints/exp001/checkpoint_epoch_50.pth"
+)
+```
+
+#### Resume with Config Overrides
+
+```python
+# Change hyperparameters for resumed run
+manager.resume_experiment(
+    source_exp_id="exp001",
+    learning_rate=0.0001,  # Lower LR for fine-tuning
+    epochs=150,            # Train for more epochs
+    batch_size=64          # Adjust batch size
+)
+```
+
+#### Checkpoint Detection Patterns
+
+ExpFlow automatically detects these checkpoint formats:
+
+**Best checkpoints** (preferred):
+- `checkpoint_best.pth`
+- `best_checkpoint.pth`
+- `model_best.pth`
+
+**Latest checkpoints**:
+- `checkpoint_latest.pth`
+- `latest_checkpoint.pth`
+
+**Epoch-specific**:
+- `checkpoint_epoch_*.pth` (e.g., `checkpoint_epoch_50.pth`)
+- `epoch_*.pth` (e.g., `epoch_50.pth`)
+
+**PyTorch Lightning**:
+- `*.ckpt` (e.g., `epoch=50-step=1000.ckpt`)
+
+#### Resume Metadata Tracking
+
+Resumed experiments track:
+- `resume_from_exp_id`: Source experiment
+- `resume_checkpoint_path`: Path to checkpoint file
+- `resume_epoch`: Epoch number being resumed from
+- `resume_count`: Number of times source has been resumed
+
+View resume information:
+```bash
+expflow show exp001_resume1
+```
+
+Output:
+```
+======================================================================
+Experiment: exp001_resume1
+======================================================================
+
+Description: Resume from exp001: Original experiment description
+Status: created
+
+Configuration:
+  resume_from_exp_id: exp001
+  resume_checkpoint_path: /scratch/USER/project/checkpoints/exp001/checkpoint_best.pth
+  resume_epoch: 50
+  learning_rate: 0.0001
+  ...
+
+Timeline:
+  Created: 2026-01-26T15:30:00
+  Resuming from: exp001
+```
+
+#### Using Resume in Custom Managers
+
+Extend your manager's CLI to support resume:
+
+```python
+class MyExperimentManager(BaseExperimentManager):
+    def _generate_train_script(self, config):
+        # Check if this is a resume
+        if config.get("resume_checkpoint_path"):
+            checkpoint_arg = f"--resume {config['resume_checkpoint_path']}"
+            start_epoch = config.get("resume_epoch", 0) + 1
+        else:
+            checkpoint_arg = ""
+            start_epoch = 0
+
+        return f"""#!/bin/bash
+#SBATCH --job-name=train_{config['exp_id']}
+#SBATCH --partition={config['partition']}
+#SBATCH --gres=gpu:{config['num_gpus']}
+...
+
+python train.py \\
+    --exp-id {config['exp_id']} \\
+    --start-epoch {start_epoch} \\
+    {checkpoint_arg} \\
+    --epochs {config['epochs']}
+"""
+
+# Add resume command to your CLI
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("command", choices=["new", "submit", "resume", "list"])
+    parser.add_argument("--source-exp", help="Source experiment for resume")
+    parser.add_argument("--new-exp", help="New experiment ID for resume")
+
+    args = parser.parse_args()
+    manager = MyExperimentManager(hpc_config)
+
+    if args.command == "resume":
+        new_id = manager.resume_experiment(
+            source_exp_id=args.source_exp,
+            new_exp_id=args.new_exp
+        )
+        print(f"Created resume experiment: {new_id}")
+        print("Submit with: python my_manager.py submit {new_id}")
+```
+
+#### Common Use Cases
+
+**1. Resume after time limit exceeded:**
+```bash
+# Original job hit 48-hour limit
+python my_manager.py resume --source-exp exp001 --new-exp exp001_continue
+python my_manager.py submit exp001_continue
+```
+
+**2. Fine-tune with different learning rate:**
+```python
+manager.resume_experiment(
+    source_exp_id="exp001",
+    new_exp_id="exp001_finetune",
+    learning_rate=0.00001,
+    description="Fine-tuning with lower LR"
+)
+```
+
+**3. Extend training duration:**
+```python
+manager.resume_experiment(
+    source_exp_id="exp001",
+    epochs=200,  # Original was 100 epochs
+    description="Extended training to 200 epochs"
+)
+```
+
+**4. Resume with different batch size (memory issues):**
+```python
+manager.resume_experiment(
+    source_exp_id="exp001",
+    batch_size=32,  # Reduce from 64
+    description="Resume with smaller batch size"
+)
+```
+
+#### Best Practices
+
+1. **Always save checkpoints regularly**: Set checkpoint interval in your training script
+2. **Use descriptive resume IDs**: Include reason for resume (e.g., `exp001_lowerlr`)
+3. **Check checkpoint exists before submitting**: Use `expflow show` to verify
+4. **Track resume chain**: Original experiment's `resume_count` increments
+5. **Git tracking**: Resume captures current git state for reproducibility
+6. **Test resume locally**: Verify checkpoint loading before submitting to SLURM
+
+#### Troubleshooting
+
+**No checkpoint found:**
+```
+Error: No checkpoint found for experiment exp001
+  Looked in: /scratch/USER/project/checkpoints/exp001
+```
+
+Solution: Check checkpoint directory exists and contains valid checkpoints
+
+**Checkpoint path doesn't exist:**
+```
+Error: Checkpoint not found: /path/to/checkpoint.pth
+```
+
+Solution: Verify exact path and filename
+
+**Resume experiment already exists:**
+```
+Error: Experiment exp001_resume1 already exists
+  Specify a different new_exp_id or delete the existing experiment
+```
+
+Solution: Use different `new_exp_id` or delete existing resumed experiment
+
 ---
 
 ## Experiment Pruning
