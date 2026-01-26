@@ -8,7 +8,7 @@ Complete guide to using ExpFlow for HPC experiment management.
 2. [Quick Start](#quick-start)
 3. [Interactive Initialization](#interactive-initialization)
 4. [Experiment Management](#experiment-management)
-5. [Monitoring Experiments](#monitoring-experiments)
+5. [Experiment Pruning](#experiment-pruning)
 6. [Resource Management](#resource-management)
 7. [Partition and Account Management](#partition-and-account-management)
 8. [Cache Building](#cache-building)
@@ -350,6 +350,380 @@ expflow cancel exp001 --type train
 
 # Cancel only evaluation job
 expflow cancel exp001 --type eval
+```
+
+---
+
+## Experiment Pruning
+
+**New in v0.5.0:** Clean up duplicate experiment runs and invalid experiments to manage disk space on HPC scratch storage.
+
+### Why Prune?
+
+Over time, you may accumulate:
+- **Duplicate runs**: Multiple versions of the same experiment with different timestamps
+- **Failed experiments**: Experiments without valid checkpoints or results
+- **Test runs**: Early experiments that never completed
+
+Pruning helps:
+- Free up disk space (typically 10-25 GB on systems with many experiments)
+- Keep directories organized
+- Avoid hitting storage quotas
+- Maintain only valid, successful experiments
+
+### Quick Start
+
+#### Preview What Would Be Cleaned
+
+**Always start with dry-run mode:**
+
+```bash
+expflow prune --dry-run
+```
+
+This shows exactly what would be deleted without making any changes.
+
+#### Clean Up Everything
+
+```bash
+expflow prune
+```
+
+This will:
+1. Remove experiments without valid checkpoints or evaluation results
+2. Keep only the most recent run of each experiment
+3. Move pruned experiments to `.archive/experiments/YYYYMMDD/`
+4. Report space freed
+
+### Pruning Modes
+
+#### Clean Everything (Default)
+
+```bash
+expflow prune
+```
+
+Removes both duplicates and invalid experiments.
+
+#### Only Remove Duplicates
+
+```bash
+expflow prune --mode duplicates
+```
+
+Keeps all experiments, but removes older versions of the same experiment.
+
+Example:
+```
+exp_b11_ijepa_planning_agent_v3_ijepa_refactor_100pct_20251210_205839
+exp_b11_ijepa_planning_agent_v3_ijepa_refactor_100pct_20251211_184349
+exp_b11_ijepa_planning_agent_v3_ijepa_refactor_100pct_20251212_143922  ← Keeps this (most recent)
+```
+
+#### Only Remove Invalid
+
+```bash
+expflow prune --mode invalid
+```
+
+Removes experiments without valid checkpoints or evaluation results, but keeps all duplicate runs.
+
+### Pruning Options
+
+#### Keep Multiple Versions
+
+```bash
+# Keep 2 most recent runs of each experiment
+expflow prune --keep 2
+
+# Keep 3 most recent runs
+expflow prune --keep 3
+```
+
+Useful when you want to compare recent runs or maintain backup versions.
+
+#### Require Specific Epoch Counts
+
+```bash
+# Require checkpoints with at least 50 epochs
+expflow prune --mode invalid --required-epochs 50
+```
+
+Removes experiments that didn't train for the expected number of epochs.
+
+#### Skip Validation Checks
+
+```bash
+# Don't check for valid checkpoints
+expflow prune --no-checkpoint-check
+
+# Don't check for evaluation results
+expflow prune --no-eval-check
+
+# Skip both checks (only remove duplicates)
+expflow prune --no-checkpoint-check --no-eval-check
+```
+
+### Understanding the Output
+
+Example output:
+
+```
+======================================================================
+ExpFlow Experiment Pruner
+======================================================================
+[LIVE MODE]
+
+Step 1: Removing invalid experiments...
+----------------------------------------------------------------------
+Validating 150 experiments...
+  Checking for valid checkpoints
+  Checking for evaluation results
+
+  [PRUNE] exp_a1_failed_20251201_120000 - missing checkpoint - 125.3 MB
+
+  149 valid experiments kept
+
+
+Step 2: Removing duplicate runs...
+----------------------------------------------------------------------
+
+[exp_b11_ijepa_planning_agent_v3_ijepa_refactor_100pct]
+  Found 7 runs, keeping 1 most recent
+    [KEEP] exp_b11_..._20251212_143922 (2025-12-12 14:39:22)
+    [PRUNE] exp_b11_..._20251212_143904 (2025-12-12 14:39:04) - 256 MB
+    [PRUNE] exp_b11_..._20251211_184427 (2025-12-11 18:44:27) - 251 MB
+    ...
+
+======================================================================
+Summary
+======================================================================
+Total experiments scanned: 150
+Kept: 45
+Pruned: 105
+  - Invalid (missing results/checkpoints): 1
+  - Duplicates: 104
+Space freed: 24567.8 MB (23.99 GB)
+
+Archived to: /scratch/ah7072/.archive/experiments
+======================================================================
+```
+
+### Safety Features
+
+#### Nothing is Permanently Deleted
+
+All pruned experiments are moved to `.archive/experiments/`:
+
+```
+.archive/
+└── experiments/
+    ├── 20260126/
+    │   ├── exp_b11_..._20251210_205839/
+    │   ├── exp_b11_..._20251211_184349/
+    │   └── ...
+    └── 20260125/
+        └── ...
+```
+
+#### Recover a Pruned Experiment
+
+```bash
+# List archived experiments
+ls .archive/experiments/20260126/
+
+# Restore to training directory
+mv .archive/experiments/20260126/exp_b11_... experiments/training/
+```
+
+#### Dry-Run Mode
+
+**Always use dry-run first:**
+
+```bash
+expflow prune --dry-run | less
+```
+
+Review the output carefully before running the actual pruning.
+
+### Common Workflows
+
+#### Monthly Cleanup
+
+```bash
+# Preview cleanup
+expflow prune --dry-run > /scratch/$USER/prune_preview_$(date +%Y%m%d).txt
+
+# Review the preview
+less /scratch/$USER/prune_preview_*.txt
+
+# Execute
+expflow prune --keep 2
+```
+
+#### Before Hitting Storage Quotas
+
+```bash
+# Aggressive cleanup
+expflow prune --keep 1
+
+# Check space freed
+du -sh .archive/experiments/
+
+# If still need space, can remove archive (PERMANENT!)
+# Only do this if you're sure you don't need old experiments
+rm -rf .archive/experiments/
+```
+
+#### After Paper Submission
+
+```bash
+# Keep 3 versions for reproducibility
+expflow prune --keep 3
+
+# Document which experiments were kept
+ls experiments/training/ > paper_experiments_$(date +%Y%m%d).txt
+```
+
+#### Before Starting New Experiments
+
+```bash
+# Quick cleanup to free space
+expflow prune
+
+# Check free space
+df -h /scratch/$USER
+```
+
+### Programmatic Usage
+
+You can also prune experiments from Python code:
+
+```python
+from expflow import BaseExperimentManager
+
+class MyManager(BaseExperimentManager):
+    def cleanup_old_runs(self):
+        """Clean up old experiment runs"""
+        stats = self.prune_experiments(
+            mode="all",
+            keep_n=2,
+            require_checkpoint=True,
+            require_eval=True,
+            dry_run=False,
+            verbose=True
+        )
+
+        print(f"Pruned: {stats.pruned} experiments")
+        print(f"Kept: {stats.kept} experiments")
+        print(f"Space freed: {stats.space_freed_mb:.1f} MB")
+        print(f"Duplicates removed: {stats.duplicates_removed}")
+        print(f"Invalid removed: {stats.invalid_removed}")
+```
+
+Or use the pruner directly:
+
+```python
+from expflow import ExperimentPruner
+from pathlib import Path
+
+pruner = ExperimentPruner(
+    experiments_dir=Path("/scratch/user/experiments/training"),
+    evaluations_dir=Path("/scratch/user/experiments/evaluations"),
+    archive_dir=Path("/scratch/user/.archive/experiments")
+)
+
+# Prune all
+stats = pruner.prune_all(
+    keep_n=1,
+    require_checkpoint=True,
+    require_eval=True,
+    dry_run=False
+)
+
+print(f"Total space freed: {stats.space_freed_mb / 1024:.2f} GB")
+```
+
+### How It Works
+
+#### Duplicate Detection
+
+The pruner groups experiments by **base name** (everything except the timestamp):
+
+```
+exp_a10_transfuser_agent_dinov2_refactor_100pct_20251127_100715
+exp_a10_transfuser_agent_dinov2_refactor_100pct_20251127_231309
+exp_a10_transfuser_agent_dinov2_refactor_100pct_20251128_055506
+
+Base name: exp_a10_transfuser_agent_dinov2_refactor_100pct
+Timestamps: 20251127_100715, 20251127_231309, 20251128_055506
+Keeps: Most recent (20251128_055506)
+```
+
+#### Checkpoint Validation
+
+Looks for common checkpoint file patterns:
+- `checkpoint*.pth`, `checkpoint*.pt`
+- `model*.pth`, `model*.pt`
+- `*.ckpt`
+
+If `--required-epochs 50` is specified, also checks for epoch information in filename.
+
+#### Evaluation Results Validation
+
+Looks for result file patterns:
+- `results.json`, `metrics.json`
+- `eval_results.json`, `*_results.json`
+- `metrics.txt`, `results.txt`
+
+Checks both training directory and corresponding evaluation directory.
+
+### Best Practices
+
+1. **Always use --dry-run first** to preview changes
+2. **Keep at least 2 versions** during active development (`--keep 2`)
+3. **Keep only 1 version** when archiving completed experiments (`--keep 1`)
+4. **Run monthly** to prevent accumulation
+5. **Document experiments** before aggressive cleanup (list to text file)
+6. **Check archive size** periodically and clean if needed
+
+### Troubleshooting
+
+#### "No experiments found"
+
+Make sure you're in the project directory:
+
+```bash
+# Check for .hpc_config.yaml
+ls -la .hpc_config.yaml
+
+# Navigate to project root
+cd /scratch/$USER/my-project
+```
+
+#### Pruner Keeps Experiments You Want to Delete
+
+The pruner keeps the most recent by timestamp. If you want to delete specific experiments manually:
+
+```bash
+# Safe manual deletion
+mkdir -p .archive/manual/$(date +%Y%m%d)
+mv experiments/training/exp_specific .archive/manual/$(date +%Y%m%d)/
+```
+
+#### Checkpoint Detection Not Working
+
+If your checkpoints have custom naming:
+
+```python
+from expflow import ExperimentPruner
+from pathlib import Path
+
+class CustomPruner(ExperimentPruner):
+    def _has_valid_checkpoint(self, exp_dir: Path, required_epochs=None):
+        # Custom checkpoint validation
+        ckpt = exp_dir / "my_custom_checkpoint.pkl"
+        return ckpt.exists()
 ```
 
 ---
@@ -1421,19 +1795,25 @@ print(f'Partitions: {partitions}')
 
 ---
 
-## What's New in v0.3.4
+## What's New in v0.5.0
 
-**Experiment Monitoring Commands:**
-- `expflow status` - Show all experiments and SLURM jobs
-- `expflow list` - List experiments with filtering
-- `expflow logs <exp_id>` - View experiment logs
-- `expflow tail <exp_id>` - Follow logs in real-time
-- `expflow cancel <exp_id>` - Cancel running jobs
+**Experiment Pruning System:**
+- `expflow prune` - Clean up duplicate runs and invalid experiments
+- `--dry-run` - Preview changes before deleting
+- `--keep N` - Keep N most recent runs per experiment
+- `--mode {all,duplicates,invalid}` - Choose pruning strategy
+- Safe archival to `.archive/` instead of permanent deletion
+- Typical space savings: 10-25 GB on systems with many duplicates
 
-**No More Custom Manager Scripts Needed:**
-Basic experiment monitoring is now built into the CLI. Create custom managers only for advanced workflows.
+**Key Benefits:**
+- Manage disk space on HPC scratch storage
+- Keep directories organized with only valid experiments
+- Safe recovery from `.archive/` if needed
+- Perfect for avoiding storage quota limits
 
-See `CHANGELOG.md` for complete version history.
+**See Also:**
+- [Experiment Pruning](#experiment-pruning) section in this guide
+- `CHANGELOG.md` for complete version history
 
 ---
 

@@ -670,3 +670,69 @@ class BaseExperimentManager(ABC):
             print(f"Cancelled jobs for {exp_id}: {', '.join(cancelled)}")
             meta["status"] = "cancelled"
             self._save_metadata()
+
+    def prune_experiments(
+        self,
+        mode: str = "all",
+        keep_n: int = 1,
+        require_checkpoint: bool = True,
+        require_eval: bool = True,
+        required_epochs: Optional[int] = None,
+        dry_run: bool = False,
+        verbose: bool = True
+    ):
+        """
+        Prune duplicate and invalid experiments
+
+        Args:
+            mode: Pruning mode - "all", "duplicates", or "invalid"
+            keep_n: Number of most recent runs to keep per experiment
+            require_checkpoint: If True, prune experiments without checkpoints
+            require_eval: If True, prune experiments without eval results
+            required_epochs: If specified, require checkpoint with this many epochs
+            dry_run: If True, preview without actually deleting
+            verbose: If True, print detailed information
+
+        Returns:
+            PruneStats with operation results
+        """
+        from .pruner import ExperimentPruner
+
+        # Find evaluation directory if it exists
+        eval_dir = None
+        if self.experiments_dir.parent.exists():
+            possible_eval = self.experiments_dir.parent / "evaluations"
+            if possible_eval.exists():
+                eval_dir = possible_eval
+
+        # Initialize pruner
+        pruner = ExperimentPruner(
+            experiments_dir=self.experiments_dir,
+            evaluations_dir=eval_dir,
+            archive_dir=self.experiments_dir.parent / ".archive" / "experiments"
+        )
+
+        # Perform pruning
+        if mode == "duplicates":
+            return pruner.prune_duplicates(
+                keep_n=keep_n,
+                dry_run=dry_run,
+                verbose=verbose
+            )
+        elif mode == "invalid":
+            return pruner.prune_invalid(
+                require_checkpoint=require_checkpoint,
+                require_eval=require_eval,
+                required_epochs=required_epochs,
+                dry_run=dry_run,
+                verbose=verbose
+            )
+        else:  # all
+            return pruner.prune_all(
+                keep_n=keep_n,
+                require_checkpoint=require_checkpoint,
+                require_eval=require_eval,
+                required_epochs=required_epochs,
+                dry_run=dry_run,
+                verbose=verbose
+            )

@@ -5,6 +5,57 @@ All notable changes to ExpFlow will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-01-26
+
+### Added
+- **Experiment Pruning System**: Comprehensive cleanup functionality for duplicate and invalid experiments
+  - `ExperimentPruner`: Core pruning engine with duplicate detection and validation
+  - `expflow prune` CLI command: Clean up experiments with multiple modes
+  - `BaseExperimentManager.prune_experiments()`: Programmatic pruning API
+  - Three pruning modes: `all`, `duplicates`, `invalid`
+  - Smart duplicate detection by base experiment name (ignores timestamps)
+  - Checkpoint validation (`.pth`, `.pt`, `.ckpt` files)
+  - Evaluation results validation (`results.json`, `metrics.json`, etc.)
+  - Epoch-based checkpoint filtering (`--required-epochs`)
+  - Safe archival to `.archive/experiments/YYYYMMDD/` instead of permanent deletion
+  - Dry-run mode for previewing changes without deletion
+  - Space tracking (reports MB/GB freed)
+  - `PruneStats` dataclass for operation results
+
+- **Pruning CLI Options**:
+  - `--mode {all,duplicates,invalid}`: Select pruning strategy
+  - `--keep N`: Keep N most recent runs per experiment (default: 1)
+  - `--dry-run`: Preview without deleting
+  - `--no-checkpoint-check`: Skip checkpoint validation
+  - `--no-eval-check`: Skip eval results validation
+  - `--required-epochs N`: Require checkpoints with >= N epochs
+
+- **Documentation**:
+  - USER_GUIDE.md: Added comprehensive "Experiment Pruning" section
+  - examples/test_pruner.py: Verified test script
+
+### Features
+- Automatic timestamp extraction from experiment directories (`YYYYMMDD_HHMMSS`)
+- Groups experiments by base name for intelligent duplicate detection
+- Configurable checkpoint and evaluation validation
+- Support for custom archive directories
+- Collision handling in archive (appends timestamp if needed)
+- Works with both flat and nested experiment directory structures
+- Integration with training and evaluation subdirectories
+
+### Use Cases
+- Clean up duplicate experiment runs (keep only most recent)
+- Remove failed experiments without valid outputs
+- Free up disk space on HPC scratch storage (10-25 GB typical savings)
+- Maintain organized experiment directories
+- Prepare for storage quota limits
+- Archive old experiments safely
+
+### Changed
+- Package exports now include `ExperimentPruner` and `PruneStats`
+- README updated with pruning feature in key features and commands
+- CLI help text includes pruning examples
+
 ## [0.4.0] - 2026-01-26
 
 ### Added

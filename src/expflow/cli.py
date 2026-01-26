@@ -537,6 +537,64 @@ def cmd_cancel(args):
         _save_experiments_db(project_root, metadata)
 
 
+def cmd_prune(args):
+    """Prune duplicate and invalid experiments"""
+    try:
+        config = load_project_config()
+    except FileNotFoundError:
+        print("Error: Not in a project directory. Run 'expflow init' first.")
+        sys.exit(1)
+
+    from .pruner import ExperimentPruner
+
+    # Determine directories
+    experiments_dir = Path(config.experiments_dir)
+
+    # Check if experiments_dir has training and evaluations subdirs
+    training_dir = experiments_dir / "training"
+    evaluations_dir = experiments_dir / "evaluations"
+
+    # Use subdirectories if they exist, otherwise use experiments_dir directly
+    if training_dir.exists() and training_dir.is_dir():
+        target_dir = training_dir
+    else:
+        target_dir = experiments_dir
+
+    eval_dir = evaluations_dir if evaluations_dir.exists() else None
+
+    # Initialize pruner
+    pruner = ExperimentPruner(
+        experiments_dir=target_dir,
+        evaluations_dir=eval_dir,
+        archive_dir=experiments_dir.parent / ".archive" / "experiments"
+    )
+
+    # Perform pruning based on mode
+    if args.mode == "duplicates":
+        stats = pruner.prune_duplicates(
+            keep_n=args.keep,
+            dry_run=args.dry_run,
+            verbose=True
+        )
+    elif args.mode == "invalid":
+        stats = pruner.prune_invalid(
+            require_checkpoint=not args.no_checkpoint_check,
+            require_eval=not args.no_eval_check,
+            required_epochs=args.required_epochs,
+            dry_run=args.dry_run,
+            verbose=True
+        )
+    else:  # all
+        stats = pruner.prune_all(
+            keep_n=args.keep,
+            require_checkpoint=not args.no_checkpoint_check,
+            require_eval=not args.no_eval_check,
+            required_epochs=args.required_epochs,
+            dry_run=args.dry_run,
+            verbose=True
+        )
+
+
 def main():
     """Main CLI entry point"""
     parser = argparse.ArgumentParser(
@@ -551,6 +609,7 @@ Examples:
   expflow logs exp001               # View experiment logs
   expflow tail exp001               # Follow logs in real-time
   expflow cancel exp001             # Cancel running jobs
+  expflow prune --dry-run           # Preview cleanup of duplicates/invalid experiments
 
 For full docs: https://github.com/hurryingauto3/expflow-hpc
         """,
@@ -657,6 +716,53 @@ For full docs: https://github.com/hurryingauto3/expflow-hpc
         help="Cancel specific job type only"
     )
 
+    # Prune command
+    prune_parser = subparsers.add_parser(
+        "prune",
+        help="Clean up duplicate and invalid experiments",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  expflow prune --dry-run              # Preview what would be pruned
+  expflow prune --mode duplicates      # Remove duplicates only
+  expflow prune --mode invalid         # Remove invalid only
+  expflow prune --keep 2               # Keep 2 most recent of each experiment
+  expflow prune --required-epochs 50   # Require checkpoint with >= 50 epochs
+        """
+    )
+    prune_parser.add_argument(
+        "--mode",
+        choices=["all", "duplicates", "invalid"],
+        default="all",
+        help="Pruning mode (default: all)"
+    )
+    prune_parser.add_argument(
+        "--keep",
+        type=int,
+        default=1,
+        help="Number of most recent runs to keep per experiment (default: 1)"
+    )
+    prune_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview what would be pruned without actually deleting"
+    )
+    prune_parser.add_argument(
+        "--no-checkpoint-check",
+        action="store_true",
+        help="Don't check for valid checkpoints"
+    )
+    prune_parser.add_argument(
+        "--no-eval-check",
+        action="store_true",
+        help="Don't check for evaluation results"
+    )
+    prune_parser.add_argument(
+        "--required-epochs",
+        type=int,
+        help="Require checkpoint with at least this many epochs"
+    )
+
     args = parser.parse_args()
 
     if not args.command:
@@ -686,6 +792,8 @@ For full docs: https://github.com/hurryingauto3/expflow-hpc
         cmd_tail(args)
     elif args.command == "cancel":
         cmd_cancel(args)
+    elif args.command == "prune":
+        cmd_prune(args)
 
 
 if __name__ == "__main__":
