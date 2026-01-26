@@ -18,6 +18,11 @@ from .resource_advisor import ResourceAdvisor, PartitionInfo, ResourceRecommenda
 from .partition_validator import PartitionValidator, validate_job_config
 from .interactive_init import interactive_init, quick_init
 from .cache_builder import BaseCacheBuilder, CacheConfig
+from .results_harvester import (
+    BaseResultsHarvester,
+    TrainingMetrics,
+    EvaluationMetrics,
+)
 
 __all__ = [
     "BaseExperimentManager",
@@ -36,4 +41,7 @@ __all__ = [
     "quick_init",
     "BaseCacheBuilder",
     "CacheConfig",
+    "BaseResultsHarvester",
+    "TrainingMetrics",
+    "EvaluationMetrics",
 ]

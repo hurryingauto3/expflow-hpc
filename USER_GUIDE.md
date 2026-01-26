@@ -12,9 +12,10 @@ Complete guide to using ExpFlow for HPC experiment management.
 6. [Resource Management](#resource-management)
 7. [Partition and Account Management](#partition-and-account-management)
 8. [Cache Building](#cache-building)
-9. [Creating Custom Managers](#creating-custom-managers)
-10. [Advanced Usage](#advanced-usage)
-11. [Troubleshooting](#troubleshooting)
+9. [Results Harvesting](#results-harvesting)
+10. [Creating Custom Managers](#creating-custom-managers)
+11. [Advanced Usage](#advanced-usage)
+12. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -788,6 +789,318 @@ apptainer exec --bind CACHE.sqsh:/mount/point:image-src=/ container.sif ls /moun
 # Check bind mount syntax
 # Correct: --bind overlay.sqsh:/cache/path:image-src=/
 # Wrong: --bind overlay.sqsh:/cache/path  (missing :image-src=/)
+```
+
+---
+
+## Results Harvesting
+
+ExpFlow provides a framework for harvesting training logs and evaluation results into a structured format for analysis.
+
+### Results Directory Structure
+
+All harvested results are organized under `experiments/results/`:
+
+```
+/scratch/$USER/experiments/results/
+├── plots/                  # Training curves and comparison plots
+│   ├── exp_b15_training.png
+│   ├── val_loss_comparison.png
+│   └── pdm_score_comparison.png
+├── csvs/                   # Exported CSV files
+│   ├── results_20260126.csv
+│   └── combined_metrics.csv
+└── analysis/               # Analysis reports
+    └── summary_report.json
+```
+
+### Why Harvest Results?
+
+Manual result tracking is error-prone:
+- Copy-pasting metrics from logs → errors
+- Excel spreadsheets → outdated quickly
+- Screenshots of plots → not reproducible
+
+ExpFlow automates:
+- **TensorBoard log parsing**: Extract training/validation loss
+- **Evaluation result parsing**: Extract scores from CSVs/JSONs
+- **Visualization**: Generate comparison plots
+- **Export**: CSV/JSON for further analysis
+
+### Using the Results Harvester
+
+#### Step 1: Create Your Results Harvester
+
+Extend `BaseResultsHarvester` to implement project-specific result parsing:
+
+```python
+from expflow import BaseResultsHarvester, EvaluationMetrics
+from pathlib import Path
+import pandas as pd
+
+class MyResultsHarvester(BaseResultsHarvester):
+    """Custom results harvester for my project"""
+
+    def parse_evaluation_results(self, result_file: Path) -> EvaluationMetrics:
+        """Parse evaluation results from CSV/JSON"""
+
+        if result_file.suffix == '.csv':
+            df = pd.read_csv(result_file)
+
+            # Extract experiment ID
+            exp_id = self._extract_exp_id(result_file)
+
+            # Extract metrics
+            metrics = {
+                'accuracy': df['accuracy'].mean(),
+                'precision': df['precision'].mean(),
+                'recall': df['recall'].mean(),
+            }
+
+            return EvaluationMetrics(
+                exp_id=exp_id,
+                eval_split="test",
+                score=metrics['accuracy'],
+                metrics=metrics,
+                csv_path=str(result_file)
+            )
+
+        return None
+
+    def _extract_exp_id(self, file_path: Path) -> str:
+        """Extract experiment ID from file path"""
+        # Your logic to extract exp_id from path
+        return file_path.parent.name
+```
+
+#### Step 2: Harvest Single Experiment
+
+```python
+harvester = MyResultsHarvester()
+
+# Harvest training and evaluation results
+training, evaluation = harvester.harvest_experiment(
+    exp_id="exp001",
+    generate_plots=True
+)
+
+if training:
+    print(f"Val loss: {training.val_loss_min:.4f}")
+
+if evaluation:
+    for eval_result in evaluation:
+        print(f"Score ({eval_result.eval_split}): {eval_result.score:.4f}")
+```
+
+#### Step 3: Harvest All Experiments
+
+```python
+# Find all experiments
+exp_ids = ["exp001", "exp002", "exp003"]
+
+# Harvest all
+training_results, eval_results = harvester.harvest_all_experiments(
+    exp_ids,
+    generate_plots=True
+)
+
+print(f"Harvested {len(training_results)} training results")
+print(f"Harvested {len(eval_results)} evaluation results")
+```
+
+#### Step 4: Export Results
+
+```python
+# Export to CSV
+csv_path = harvester.export_to_csv(training_results, eval_results)
+print(f"Exported to: {csv_path}")
+
+# Export to JSON
+json_path = harvester.export_to_json(training_results, eval_results)
+print(f"Exported to: {json_path}")
+```
+
+### Complete Example: NAVSIM Results Harvester
+
+See `examples/navsim_results_harvester.py` for a complete implementation:
+
+```python
+from expflow import BaseResultsHarvester, EvaluationMetrics
+import pandas as pd
+
+class NavsimResultsHarvester(BaseResultsHarvester):
+    """Harvests NAVSIM training logs and PDM Score results"""
+
+    def parse_evaluation_results(self, result_file: Path) -> EvaluationMetrics:
+        """Parse PDM Score CSV results"""
+
+        df = pd.read_csv(result_file)
+
+        # PDM Score metrics
+        metrics = {
+            'no_at_fault_collisions': df['no_at_fault_collisions'].mean(),
+            'drivable_area_compliance': df['drivable_area_compliance'].mean(),
+            'ego_progress': df['ego_progress'].mean(),
+            'comfort': df['comfort'].mean(),
+            'score': df['score'].mean()  # Overall PDM score
+        }
+
+        return EvaluationMetrics(
+            exp_id=self._extract_exp_id(result_file),
+            eval_split="navtest",
+            score=metrics['score'],
+            metrics=metrics,
+            csv_path=str(result_file)
+        )
+```
+
+**Usage:**
+
+```bash
+# Harvest single experiment
+python navsim_results_harvester.py harvest exp_b15
+
+# Harvest all experiments
+python navsim_results_harvester.py harvest-all
+
+# Generate comparison plots
+python navsim_results_harvester.py compare --csv results.csv --backbone ijepa
+
+# Export results
+python navsim_results_harvester.py export all_results.csv --json
+```
+
+### CLI Integration
+
+You can add harvesting commands to your experiment manager CLI:
+
+```python
+from expflow import BaseExperimentManager
+from my_results_harvester import MyResultsHarvester
+
+class MyManager(BaseExperimentManager):
+    def __init__(self, hpc_config):
+        super().__init__(hpc_config)
+        # Add results harvester
+        self.results_harvester = MyResultsHarvester()
+
+    def harvest_results(self, exp_id: str):
+        """Harvest results for experiment"""
+        training, evaluation = self.results_harvester.harvest_experiment(exp_id)
+
+        # Update metadata
+        if training or evaluation:
+            self.metadata[exp_id]["results"] = {
+                "training": {
+                    "val_loss_min": training.val_loss_min if training else None
+                },
+                "evaluation": [
+                    {"split": e.eval_split, "score": e.score}
+                    for e in evaluation
+                ]
+            }
+            self._save_metadata()
+
+        return training, evaluation
+```
+
+### Features
+
+**Training Metrics (from TensorBoard):**
+- Training loss (min, last)
+- Validation loss (min, last)
+- Learning rate trajectory
+- Custom metrics
+
+**Evaluation Metrics (from CSVs/JSONs):**
+- Overall scores
+- Per-metric breakdowns
+- Multiple evaluation splits
+
+**Visualizations:**
+- Training curves (loss vs steps)
+- Comparison bar charts
+- Scatter plots (loss vs score)
+- Box plots by groups
+
+### Result Analysis Example
+
+After harvesting, analyze results with pandas:
+
+```python
+import pandas as pd
+
+# Load harvested results
+df = pd.read_csv("experiments/results/csvs/results.csv")
+
+# Find best experiment
+best_exp = df.loc[df['score'].idxmax()]
+print(f"Best: {best_exp['exp_id']} with score {best_exp['score']:.4f}")
+
+# Compare by backbone
+backbone_stats = df.groupby('backbone')['score'].agg(['mean', 'std', 'count'])
+print(backbone_stats)
+
+# Filter and sort
+top_5 = df.nlargest(5, 'score')[['exp_id', 'backbone', 'score', 'val_loss_min']]
+print(top_5)
+```
+
+### Best Practices
+
+1. **Harvest regularly**: Run after each experiment completes
+2. **Version results**: Include timestamps in CSV filenames
+3. **Backup CSVs**: Keep results in version control
+4. **Document metrics**: Add metric definitions to code comments
+5. **Automate**: Add harvesting to experiment submission workflow
+
+### Comparison with Your Script
+
+Your current `extract_lightning_metrics.py` script functionality is now integrated:
+
+| Your Script | ExpFlow Equivalent |
+|-------------|-------------------|
+| `extract_scalars_from_tfevents()` | `extract_tensorboard_scalars()` |
+| `find_training_experiments()` | `find_tensorboard_logs()` |
+| `find_evaluation_results()` | `find_evaluation_results()` |
+| `plot_training_curves()` | `plot_training_curves()` |
+| `plot_comparison_by_backbone()` | `generate_comparison_plots()` |
+| Manual CSV export | `export_to_csv()` / `export_to_json()` |
+
+**Benefits of ExpFlow harvester:**
+- Object-oriented design (easier to extend)
+- Integrated with experiment manager
+- Results stored in structured directory
+- Automatic experiment ID extraction
+- Type-safe with dataclasses
+
+### Troubleshooting
+
+**Problem: TensorBoard logs not found**
+```bash
+# Check log location
+ls experiments/training/exp_*/*/events.out.tfevents*
+
+# Verify pattern in find_tensorboard_logs()
+```
+
+**Problem: Evaluation results not parsed**
+```bash
+# Check result file format
+head experiments/evaluations/exp_001/results.csv
+
+# Debug parse_evaluation_results()
+python -c "
+from my_harvester import MyHarvester
+h = MyHarvester()
+result = h.parse_evaluation_results('path/to/result.csv')
+print(result)
+"
+```
+
+**Problem: Missing matplotlib for plots**
+```bash
+pip install matplotlib
 ```
 
 ---

@@ -100,6 +100,7 @@ class BaseExperimentManager(ABC):
         self.logs_dir = Path(hpc_config.logs_dir)
         self.cache_dir = Path(hpc_config.cache_dir)
         self.checkpoints_dir = Path(hpc_config.checkpoints_dir)
+        self.results_dir = self.experiments_dir / "results"  # Results harvesting directory
 
         # Framework directories
         self.configs_dir = self.project_root / "experiment_configs"
@@ -115,7 +116,11 @@ class BaseExperimentManager(ABC):
             self.experiments_dir,
             self.logs_dir / "output",
             self.logs_dir / "error",
-            self.checkpoints_dir
+            self.checkpoints_dir,
+            self.results_dir,
+            self.results_dir / "plots",
+            self.results_dir / "csvs",
+            self.results_dir / "analysis"
         ]:
             directory.mkdir(parents=True, exist_ok=True)
 

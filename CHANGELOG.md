@@ -54,6 +54,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Large-scale data transformations
 - Inode quota optimization on HPC
 
+#### Results Harvesting Framework
+- **Results Harvesting Framework**: Infrastructure for extracting and analyzing experiment results
+  - `BaseResultsHarvester`: Abstract base class for project-specific result parsing
+  - `TrainingMetrics` / `EvaluationMetrics`: Type-safe result containers
+  - TensorBoard log parsing (train/val loss, learning rate, custom metrics)
+  - Evaluation result extraction from CSVs/JSONs
+  - Automatic visualization generation (training curves, comparison plots)
+  - CSV/JSON export for analysis
+
+- **NAVSIM Results Harvester Example**: Complete implementation for NAVSIM experiments
+  - PyTorch Lightning TensorBoard log parsing
+  - PDM Score evaluation result extraction
+  - Multi-stage evaluation support (one-stage, two-stage)
+  - Comparison plots by backbone/agent
+  - Example CLI: `navsim_results_harvester.py`
+
+- **Results Management**:
+  - `harvest_experiment()`: Harvest single experiment
+  - `harvest_all_experiments()`: Batch harvesting
+  - `export_to_csv()` / `export_to_json()`: Result export
+  - `plot_training_curves()`: Visualization generation
+  - Structured results directory: `experiments/results/{plots,csvs,analysis}`
+
+- **Documentation**:
+  - Results harvesting section in USER_GUIDE.md
+  - Integration examples with experiment managers
+  - Comparison with manual result extraction scripts
+
+#### Directory Structure Improvements
+- Cache overlays moved to `experiments/cache/overlays/` (better organization)
+- Results harvested to `experiments/results/` with subdirectories
+- All experiment-related files now under `experiments/` hierarchy
+
+### Changed
+- **Cache directory structure**: Overlays now in `experiments/cache/overlays/` instead of `/scratch/USER/overlays/`
+- **Results directory**: Added `experiments/results/` for harvested results
+- **BaseExperimentManager**: Auto-creates results subdirectories
+
 ## [0.2.0] - 2026-01-22
 
 ### Added
