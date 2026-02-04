@@ -5,6 +5,90 @@ All notable changes to ExpFlow will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-02-04
+
+### Added
+- **Container Integration System**: Generic container support with configurable images and bind mounts
+  - `HPCConfig.container_image`: Default container image path (auto-detected on Greene)
+  - `HPCConfig.container_bind_mounts`: List of custom bind mounts
+  - `BaseExperimentManager._generate_container_exec()`: Wrap scripts in apptainer execution
+  - `BaseExperimentManager._prepare_bind_mounts()`: Auto-prepare bind mounts with scratch/tmp
+  - Automatic detection of NYU Greene container images
+
+- **Conda/Environment Management**: Auto-detection and configuration
+  - `HPCConfig.conda_root`: Auto-detected conda installation path
+  - `HPCConfig.conda_env`: Environment name to activate
+  - `HPCConfig.module_loads`: List of modules to load (e.g., anaconda3/2025.06)
+  - `BaseExperimentManager._generate_conda_activation()`: Generate activation commands
+  - Supports both module-based conda and direct installations
+  - Auto-detects conda from CONDA_PREFIX, scratch directory, or home directory
+
+- **SquashFS Overlay System**: Generic overlay mounting helpers
+  - `HPCConfig.overlay_cache_dir`: Directory for .sqsh overlays (auto: cache/overlays/)
+  - `BaseExperimentManager._generate_overlay_mount()`: Generate apptainer overlay bind
+  - `BaseExperimentManager._check_overlay_availability()`: Check if overlay exists
+  - Automatic fallback suggestions when overlays are missing
+
+- **Checkpoint Registry**: Structured checkpoint tracking
+  - `BaseExperimentManager.register_checkpoint()`: Register checkpoints with metadata
+  - `BaseExperimentManager.get_registered_checkpoint()`: Retrieve best/latest checkpoint
+  - JSON-based registry at `checkpoints/checkpoint_registry.json`
+  - Tracks epoch, metrics (val_loss), and registration time
+  - Smart selection: prefer best (lowest val_loss) or most recent
+
+- **GPU Monitoring Helper**: Configurable nvidia-smi monitoring
+  - `HPCConfig.enable_gpu_monitoring`: Enable/disable GPU monitoring
+  - `HPCConfig.gpu_monitor_interval`: Monitoring interval in seconds (default: 60)
+  - `BaseExperimentManager._generate_gpu_monitoring()`: Generate monitoring commands
+  - Automatic cleanup with trap handlers
+  - Logs to: logs/output/{exp_id}_gpu_{job_id}.csv
+
+- **NCCL Optimization Presets**: GPU-specific NCCL tuning
+  - `HPCConfig.nccl_preset`: Preset name ('h200', 'a100', 'l40s', 'rtx8000')
+  - `HPCConfig.nccl_env_vars`: Custom NCCL environment variables
+  - `BaseExperimentManager._get_nccl_env_vars()`: Get optimized NCCL settings
+  - Auto-detection from partition name if preset not specified
+  - Presets for H200 (NVL P2P), A100, L40s, RTX8000
+
+- **Environment Variable Templates**: Variable substitution system
+  - `BaseExperimentManager._substitute_env_vars()`: Substitute ${var} placeholders
+  - Supports: ${scratch_dir}, ${project_root}, ${username}, ${experiments_dir}, etc.
+  - Works with any config field for dynamic path generation
+
+### Changed
+- `HPCConfig` extended with 10+ new configuration fields
+- `HPCEnvironment.detect_conda_root()`: New static method for conda detection
+- `HPCEnvironment.detect_container_image()`: New static method for container detection
+- `HPCEnvironment.create_default_config()`: Now auto-detects container and conda
+- Package version bumped to 0.7.0
+
+### Features
+- **Generic Container Support**: Works with any apptainer/singularity image
+- **Flexible Environment Management**: Module-based or direct conda installations
+- **Smart Auto-Detection**: Container images, conda paths, NCCL settings
+- **Structured Checkpoint Tracking**: Beyond simple file discovery
+- **Production Monitoring**: Built-in GPU utilization tracking
+- **Performance Optimization**: Partition-specific NCCL tuning
+
+### Use Cases
+- **Container-based workflows**: Run training in consistent environments
+- **Multi-user projects**: Auto-detect each user's conda/container setup
+- **Performance tuning**: Apply GPU-specific NCCL optimizations
+- **Checkpoint management**: Track and retrieve best/latest checkpoints systematically
+- **GPU utilization analysis**: Monitor GPU usage across training runs
+- **Dynamic path configuration**: Use templates for portable configs
+
+### Migration Notes
+Users with existing navsim_manager.py or similar can now:
+1. Remove hardcoded container paths → Use `config['container_image']`
+2. Remove hardcoded conda paths → Use `_generate_conda_activation(config)`
+3. Remove overlay mounting logic → Use `_generate_overlay_mount(cache_name, cache_path)`
+4. Remove GPU monitoring duplicates → Use `_generate_gpu_monitoring(exp_id)`
+5. Remove NCCL env var blocks → Use `_get_nccl_env_vars(partition)`
+6. Simplify checkpoint discovery → Use checkpoint registry
+
+See MIGRATION_v0.7.md for detailed migration guide.
+
 ## [0.6.0] - 2026-01-26
 
 ### Added

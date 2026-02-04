@@ -5,7 +5,7 @@ Lightweight experiment tracking for SLURM-based HPC clusters.
 Auto-detects environment, generates SLURM scripts, tracks experiments.
 """
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 from .hpcexp_core import BaseExperimentManager, BaseExperimentConfig, ExperimentMetadata
 from .hpc_config import (

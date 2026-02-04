@@ -31,10 +31,15 @@ expflow logs exp001
 
 ## Key Features
 
-- **Auto-Detection**: Automatically detects username, scratch directory, SLURM accounts, and partition access
+- **Auto-Detection**: Automatically detects username, scratch directory, SLURM accounts, partition access, containers, and conda
 - **Interactive Setup**: Menu-based initialization with intelligent account and GPU recommendations
 - **Experiment Monitoring**: Built-in commands for status tracking, log viewing, and job management
 - **Checkpoint Resumption**: Automatic checkpoint detection and experiment resume support (v0.6.0+)
+- **Checkpoint Registry**: Structured checkpoint tracking with metadata and best checkpoint selection (v0.7.0+)
+- **Container Integration**: Generic apptainer/singularity support with auto-detected images and bind mounts (v0.7.0+)
+- **Conda Management**: Auto-detected conda environments with module support (v0.7.0+)
+- **GPU Monitoring**: Built-in nvidia-smi monitoring with configurable intervals (v0.7.0+)
+- **NCCL Optimization**: GPU-specific NCCL presets for H200, A100, L40s, RTX8000 (v0.7.0+)
 - **Experiment Pruning**: Clean up duplicate runs and invalid experiments with safe archival
 - **Resource Advisor**: Real-time GPU availability and smart recommendations
 - **Partition Validation**: Automatic partition-account compatibility testing
@@ -322,20 +327,22 @@ python my_manager.py export results.csv
 - **[USER_GUIDE.md](USER_GUIDE.md)** - Complete user guide with examples
 - **[CHANGELOG.md](CHANGELOG.md)** - Version history and updates
 
-## What's New in v0.6.0
+## What's New in v0.7.0
 
-**Checkpoint Resumption:**
-- `manager.resume_experiment()` - Automatically resume from checkpoints
-- Smart checkpoint detection (best, latest, epoch-specific)
-- Support for PyTorch (.pth), PyTorch Lightning (.ckpt) formats
-- Epoch tracking and resume metadata
-- Config inheritance with overrides
-- Perfect for recovering from time limits or continuing training
+**Framework-Level Helpers** (Eliminates 150-200 lines of boilerplate):
+- **Container Integration**: Auto-detected apptainer images with configurable bind mounts
+- **Conda Management**: Auto-detected conda environments with module support
+- **SquashFS Overlays**: Generic overlay mounting helpers with automatic fallback
+- **Checkpoint Registry**: Structured checkpoint tracking with metadata and best selection
+- **GPU Monitoring**: Configurable nvidia-smi monitoring with automatic cleanup
+- **NCCL Optimization**: GPU-specific presets (H200, A100, L40s, RTX8000)
+- **Variable Substitution**: Template system for portable configs (${scratch_dir}, ${username}, etc.)
 
-**Previous (v0.5.0) - Experiment Pruning:**
-- `expflow prune` - Clean up duplicate runs and invalid experiments
-- Safe archival to `.archive/` instead of permanent deletion
-- Typical savings: 10-25 GB on systems with many duplicate runs
+**Migration**: Existing managers work unchanged. See [MIGRATION_v0.7.md](MIGRATION_v0.7.md) for upgrading.
+
+**Previous Releases:**
+- **v0.6.0**: Checkpoint resumption with `manager.resume_experiment()`
+- **v0.5.0**: Experiment pruning with `expflow prune`
 
 See [CHANGELOG.md](CHANGELOG.md) for complete version history.
 

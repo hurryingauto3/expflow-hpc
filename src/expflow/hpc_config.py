@@ -37,9 +37,26 @@ class HPCConfig:
     cache_dir: str = None
     checkpoints_dir: str = None
 
-    # Optional: Container settings
+    # Container settings
     container_image: Optional[str] = None
     use_apptainer: bool = False
+    container_bind_mounts: List[str] = field(default_factory=list)
+
+    # Conda/Environment settings
+    conda_root: Optional[str] = None  # Auto-detected if None
+    conda_env: Optional[str] = None  # Environment name to activate
+    module_loads: List[str] = field(default_factory=list)  # e.g., ["anaconda3/2025.06"]
+
+    # SquashFS overlay settings
+    overlay_cache_dir: Optional[str] = None  # Where .sqsh overlays are stored
+
+    # GPU monitoring
+    enable_gpu_monitoring: bool = False
+    gpu_monitor_interval: int = 60  # seconds
+
+    # NCCL optimization presets (by GPU type)
+    nccl_preset: Optional[str] = None  # 'h200', 'a100', 'l40s', 'rtx8000', or None
+    nccl_env_vars: Dict[str, str] = field(default_factory=dict)  # Custom NCCL vars
 
     # Cluster-specific settings
     cluster_name: str = "greene"  # greene, perlmutter, summit, etc.
@@ -55,6 +72,12 @@ class HPCConfig:
             self.cache_dir = f"{self.experiments_dir}/cache"
         if self.checkpoints_dir is None:
             self.checkpoints_dir = f"{self.experiments_dir}/checkpoints"
+        if self.overlay_cache_dir is None:
+            self.overlay_cache_dir = f"{self.cache_dir}/overlays"
+
+        # Auto-detect conda root if not provided
+        if self.conda_root is None:
+            self.conda_root = HPCEnvironment.detect_conda_root()
 
     def to_dict(self):
         """Convert to dictionary"""
@@ -163,6 +186,55 @@ class HPCEnvironment:
         return []
 
     @staticmethod
+    def detect_conda_root() -> Optional[str]:
+        """Auto-detect conda installation root"""
+        # Try common locations
+        username = HPCEnvironment.get_username()
+        candidates = [
+            f"/scratch/{username}/miniconda3",
+            f"/scratch/{username}/anaconda3",
+            f"{Path.home()}/miniconda3",
+            f"{Path.home()}/anaconda3",
+            "/opt/conda",
+            "/usr/local/conda",
+        ]
+
+        # Also check CONDA_PREFIX environment variable
+        conda_prefix = os.getenv("CONDA_PREFIX")
+        if conda_prefix:
+            # Go up to the conda root (remove /envs/env_name if present)
+            conda_root = Path(conda_prefix)
+            while conda_root.name in ["envs", "bin"]:
+                conda_root = conda_root.parent
+            candidates.insert(0, str(conda_root))
+
+        for candidate in candidates:
+            conda_sh = Path(candidate) / "etc" / "profile.d" / "conda.sh"
+            if conda_sh.exists():
+                return candidate
+
+        return None
+
+    @staticmethod
+    def detect_container_image() -> Optional[str]:
+        """Auto-detect default container image on cluster"""
+        cluster = HPCEnvironment.detect_cluster()
+
+        # NYU Greene default containers
+        if cluster == "greene":
+            # Check for common containers
+            candidates = [
+                "/share/apps/images/cuda12.6.3-cudnn9.5.1-ubuntu22.04.5.sif",
+                "/share/apps/images/cuda12.1.0-cudnn8.9.0-ubuntu22.04.sif",
+                "/share/apps/images/pytorch-2.1.0-cuda12.1.sif",
+            ]
+            for candidate in candidates:
+                if Path(candidate).exists():
+                    return candidate
+
+        return None
+
+    @staticmethod
     def get_available_partitions() -> List[str]:
         """Get available SLURM partitions"""
         try:
@@ -233,6 +305,10 @@ class HPCEnvironment:
             if default_partition == "gpu":
                 default_partition = partitions[0]
 
+        # Auto-detect container and conda
+        container_image = HPCEnvironment.detect_container_image()
+        conda_root = HPCEnvironment.detect_conda_root()
+
         config = HPCConfig(
             username=username,
             user_home=home_dir,
@@ -242,7 +318,9 @@ class HPCEnvironment:
             default_account=default_account,
             default_partition=default_partition,
             cluster_name=cluster,
-            available_partitions=partitions
+            available_partitions=partitions,
+            container_image=container_image,
+            conda_root=conda_root
         )
 
         return config

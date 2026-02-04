@@ -219,6 +219,445 @@ class BaseExperimentManager(ABC):
         """
         pass
 
+    # =========================================================================
+    # Helper Methods for Script Generation (v0.7.0+)
+    # =========================================================================
+
+    def _generate_conda_activation(self, config: Dict[str, Any]) -> str:
+        """
+        Generate conda/environment activation commands
+
+        Args:
+            config: Experiment configuration
+
+        Returns:
+            Shell commands for environment activation
+        """
+        conda_root = config.get('conda_root', self.hpc_config.conda_root)
+        conda_env = config.get('conda_env', self.hpc_config.conda_env)
+        module_loads = config.get('module_loads', self.hpc_config.module_loads)
+
+        script_lines = []
+
+        # Load modules first
+        if module_loads:
+            for module in module_loads:
+                script_lines.append(f"module load {module}")
+
+        # Conda activation
+        if conda_root and conda_env:
+            conda_sh = f"{conda_root}/etc/profile.d/conda.sh"
+            script_lines.extend([
+                f"# Activate conda environment",
+                f"if [ -f \"{conda_sh}\" ]; then",
+                f"    source \"{conda_sh}\"",
+                f"    conda activate {conda_env}",
+                f"else",
+                f"    echo \"Warning: Conda not found at {conda_root}\"",
+                f"fi"
+            ])
+        elif module_loads and conda_env:
+            # Assume module provides conda
+            script_lines.extend([
+                f"source $(conda info --base)/etc/profile.d/conda.sh",
+                f"conda activate {conda_env}"
+            ])
+
+        return "\n".join(script_lines)
+
+    def _generate_container_exec(
+        self,
+        config: Dict[str, Any],
+        script_content: str,
+        working_dir: Optional[str] = None
+    ) -> str:
+        """
+        Generate apptainer/singularity execution wrapper
+
+        Args:
+            config: Experiment configuration
+            script_content: The actual script to run inside container
+            working_dir: Working directory inside container
+
+        Returns:
+            Shell commands that wrap script_content in container exec
+        """
+        container = config.get('container_image', self.hpc_config.container_image)
+
+        if not container:
+            # No container - return script as-is
+            return script_content
+
+        # Build bind mounts
+        bind_mounts = self._prepare_bind_mounts(config)
+        bind_args = " \\\n        ".join([f'--bind "{b}"' for b in bind_mounts])
+
+        # Get environment variables to pass
+        env_vars = config.get('environment_variables', {})
+        env_args = " \\\n        ".join([f'--env "{k}={v}"' for k, v in env_vars.items()])
+
+        # Create temporary script
+        exp_id = config.get('exp_id', 'unknown')
+        script_lines = [
+            f"# Create temporary script for container execution",
+            f"TEMP_SCRIPT=$(mktemp /tmp/{exp_id}_XXXXXX.sh)",
+            f"cat > \"${{TEMP_SCRIPT}}\" << 'CONTAINER_SCRIPT_EOF'",
+            f"#!/bin/bash",
+            script_content,
+            f"CONTAINER_SCRIPT_EOF",
+            f"chmod +x \"${{TEMP_SCRIPT}}\"",
+            f"",
+            f"# Execute in container",
+            f"apptainer exec \\",
+            f"    --nv \\",
+        ]
+
+        if bind_args:
+            script_lines.append(f"    {bind_args} \\")
+
+        if working_dir:
+            script_lines.append(f"    --pwd \"{working_dir}\" \\")
+
+        if env_args:
+            script_lines.append(f"    {env_args} \\")
+
+        script_lines.extend([
+            f"    \"{container}\" \\",
+            f"    bash \"${{TEMP_SCRIPT}}\"",
+            f"",
+            f"# Cleanup",
+            f"rm -f \"${{TEMP_SCRIPT}}\""
+        ])
+
+        return "\n".join(script_lines)
+
+    def _prepare_bind_mounts(self, config: Dict[str, Any]) -> List[str]:
+        """
+        Prepare bind mount list for container
+
+        Args:
+            config: Experiment configuration
+
+        Returns:
+            List of bind mount strings (e.g., "/scratch/user:/scratch/user")
+        """
+        bind_mounts = []
+
+        # Default binds from config
+        bind_mounts.extend(self.hpc_config.container_bind_mounts)
+
+        # Auto-bind scratch directory
+        bind_mounts.append(f"{self.hpc_config.scratch_dir}:{self.hpc_config.scratch_dir}")
+
+        # Auto-bind /tmp
+        bind_mounts.append("/tmp:/tmp")
+
+        # Add any experiment-specific binds
+        if 'container_bind_mounts' in config:
+            bind_mounts.extend(config['container_bind_mounts'])
+
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_binds = []
+        for bind in bind_mounts:
+            if bind not in seen:
+                seen.add(bind)
+                unique_binds.append(bind)
+
+        return unique_binds
+
+    def _generate_overlay_mount(
+        self,
+        cache_name: str,
+        cache_path: str,
+        overlay_path: Optional[str] = None
+    ) -> str:
+        """
+        Generate SquashFS overlay mount for apptainer
+
+        Args:
+            cache_name: Name of the cache
+            cache_path: Path where cache should be mounted
+            overlay_path: Path to .sqsh file (auto-detected if None)
+
+        Returns:
+            Bind mount string for apptainer (e.g., "--bind overlay.sqsh:/cache:image-src=/")
+        """
+        if overlay_path is None:
+            overlay_path = f"{self.hpc_config.overlay_cache_dir}/{cache_name}.sqsh"
+
+        return f'--bind "{overlay_path}:{cache_path}:image-src=/"'
+
+    def _check_overlay_availability(
+        self,
+        cache_name: str,
+        overlay_path: Optional[str] = None
+    ) -> bool:
+        """
+        Check if SquashFS overlay exists
+
+        Args:
+            cache_name: Name of the cache
+            overlay_path: Path to .sqsh file (auto-detected if None)
+
+        Returns:
+            True if overlay exists, False otherwise
+        """
+        if overlay_path is None:
+            overlay_path = f"{self.hpc_config.overlay_cache_dir}/{cache_name}.sqsh"
+
+        return Path(overlay_path).exists()
+
+    def _generate_gpu_monitoring(
+        self,
+        exp_id: str,
+        interval: Optional[int] = None
+    ) -> str:
+        """
+        Generate GPU monitoring command for SLURM script
+
+        Args:
+            exp_id: Experiment ID
+            interval: Monitoring interval in seconds (uses config default if None)
+
+        Returns:
+            Shell commands for GPU monitoring
+        """
+        if not self.hpc_config.enable_gpu_monitoring:
+            return "# GPU monitoring disabled"
+
+        if interval is None:
+            interval = self.hpc_config.gpu_monitor_interval
+
+        log_file = self.logs_dir / "output" / f"{exp_id}_gpu_${{SLURM_JOB_ID}}.csv"
+
+        script_lines = [
+            f"# Start GPU monitoring",
+            f"nvidia-smi \\",
+            f"    --query-gpu=timestamp,name,utilization.gpu,utilization.memory,memory.used,memory.total \\",
+            f"    --format=csv \\",
+            f"    -l {interval} \\",
+            f"    > {log_file} &",
+            f"GPU_MONITOR_PID=$!",
+            f"",
+            f"# Cleanup function",
+            f"cleanup_gpu_monitor() {{",
+            f"    if [ ! -z \"${{GPU_MONITOR_PID}}\" ]; then",
+            f"        kill ${{GPU_MONITOR_PID}} 2>/dev/null || true",
+            f"    fi",
+            f"}}",
+            f"trap cleanup_gpu_monitor EXIT"
+        ]
+
+        return "\n".join(script_lines)
+
+    def _get_nccl_env_vars(
+        self,
+        partition: Optional[str] = None,
+        preset: Optional[str] = None
+    ) -> Dict[str, str]:
+        """
+        Get NCCL optimization environment variables
+
+        Args:
+            partition: SLURM partition (auto-detects GPU type if preset not given)
+            preset: Preset name ('h200', 'a100', 'l40s', 'rtx8000') or None
+
+        Returns:
+            Dictionary of NCCL environment variables
+        """
+        # Start with custom env vars from config
+        nccl_vars = dict(self.hpc_config.nccl_env_vars)
+
+        # Determine preset
+        if preset is None:
+            preset = self.hpc_config.nccl_preset
+
+        # Auto-detect from partition if still None
+        if preset is None and partition:
+            if 'h200' in partition.lower():
+                preset = 'h200'
+            elif 'a100' in partition.lower():
+                preset = 'a100'
+            elif 'l40s' in partition.lower():
+                preset = 'l40s'
+            elif 'rtx8000' in partition.lower():
+                preset = 'rtx8000'
+
+        # Apply preset
+        presets = {
+            'h200': {
+                'NCCL_IB_DISABLE': '0',
+                'NCCL_P2P_LEVEL': 'NVL',
+                'NCCL_NET_GDR_LEVEL': '2',
+                'CUDA_LAUNCH_BLOCKING': '0',
+                'TORCH_CUDNN_V8_API_ENABLED': '1'
+            },
+            'a100': {
+                'NCCL_IB_DISABLE': '0',
+                'NCCL_P2P_LEVEL': 'NVL',
+                'NCCL_NET_GDR_LEVEL': '1',
+                'CUDA_LAUNCH_BLOCKING': '0',
+                'TORCH_CUDNN_V8_API_ENABLED': '1'
+            },
+            'l40s': {
+                'NCCL_IB_DISABLE': '0',
+                'NCCL_P2P_LEVEL': 'SYS',
+                'NCCL_NET_GDR_LEVEL': '1',
+                'CUDA_LAUNCH_BLOCKING': '0'
+            },
+            'rtx8000': {
+                'NCCL_IB_DISABLE': '0',
+                'NCCL_P2P_LEVEL': 'SYS',
+                'NCCL_NET_GDR_LEVEL': '0',
+                'CUDA_LAUNCH_BLOCKING': '0'
+            }
+        }
+
+        if preset and preset in presets:
+            # Merge preset with custom vars (custom vars take precedence)
+            preset_vars = presets[preset]
+            for key, value in preset_vars.items():
+                if key not in nccl_vars:
+                    nccl_vars[key] = value
+
+        return nccl_vars
+
+    def _substitute_env_vars(
+        self,
+        template: str,
+        config: Dict[str, Any]
+    ) -> str:
+        """
+        Substitute environment variable templates
+
+        Supports: ${scratch_dir}, ${project_root}, ${experiments_dir}, ${username}, etc.
+
+        Args:
+            template: Template string with ${var} placeholders
+            config: Experiment configuration
+
+        Returns:
+            String with variables substituted
+        """
+        substitutions = {
+            'scratch_dir': self.hpc_config.scratch_dir,
+            'project_root': self.hpc_config.project_root,
+            'experiments_dir': self.hpc_config.experiments_dir,
+            'logs_dir': self.logs_dir,
+            'cache_dir': self.cache_dir,
+            'checkpoints_dir': self.checkpoints_dir,
+            'username': self.hpc_config.username,
+            'user_home': self.hpc_config.user_home,
+        }
+
+        # Add config-specific substitutions
+        for key, value in config.items():
+            if isinstance(value, (str, int, float, bool)):
+                substitutions[key] = str(value)
+
+        # Perform substitutions
+        result = template
+        for key, value in substitutions.items():
+            result = result.replace(f"${{{key}}}", str(value))
+
+        return result
+
+    # =========================================================================
+    # Checkpoint Registry (v0.7.0+)
+    # =========================================================================
+
+    def register_checkpoint(
+        self,
+        exp_id: str,
+        checkpoint_path: str,
+        epoch: Optional[int] = None,
+        metrics: Optional[Dict[str, float]] = None
+    ):
+        """
+        Register a checkpoint for an experiment
+
+        Args:
+            exp_id: Experiment ID
+            checkpoint_path: Path to checkpoint file
+            epoch: Epoch number (optional)
+            metrics: Checkpoint metrics like val_loss (optional)
+        """
+        registry_file = self.checkpoints_dir / "checkpoint_registry.json"
+
+        # Load existing registry
+        if registry_file.exists():
+            with open(registry_file, 'r') as f:
+                registry = json.load(f)
+        else:
+            registry = {}
+
+        # Update entry
+        if exp_id not in registry:
+            registry[exp_id] = []
+
+        checkpoint_info = {
+            'path': str(checkpoint_path),
+            'registered_at': datetime.now().isoformat(),
+            'epoch': epoch,
+            'metrics': metrics or {}
+        }
+
+        registry[exp_id].append(checkpoint_info)
+
+        # Save registry
+        with open(registry_file, 'w') as f:
+            json.dump(registry, f, indent=2, default=str)
+
+        print(f"Registered checkpoint for {exp_id}: {Path(checkpoint_path).name}")
+
+    def get_registered_checkpoint(
+        self,
+        exp_id: str,
+        prefer_best: bool = True
+    ) -> Optional[str]:
+        """
+        Retrieve registered checkpoint for experiment
+
+        Args:
+            exp_id: Experiment ID
+            prefer_best: If True, returns checkpoint with lowest val_loss
+
+        Returns:
+            Checkpoint path or None
+        """
+        registry_file = self.checkpoints_dir / "checkpoint_registry.json"
+
+        if not registry_file.exists():
+            return None
+
+        with open(registry_file, 'r') as f:
+            registry = json.load(f)
+
+        if exp_id not in registry or not registry[exp_id]:
+            return None
+
+        checkpoints = registry[exp_id]
+
+        if prefer_best and len(checkpoints) > 1:
+            # Find checkpoint with lowest val_loss
+            best_ckpt = None
+            best_loss = float('inf')
+
+            for ckpt in checkpoints:
+                metrics = ckpt.get('metrics', {})
+                val_loss = metrics.get('val_loss')
+
+                if val_loss is not None and val_loss < best_loss:
+                    best_loss = val_loss
+                    best_ckpt = ckpt
+
+            if best_ckpt:
+                return best_ckpt['path']
+
+        # Return most recent
+        return checkpoints[-1]['path']
+
     def create_experiment(
         self,
         exp_id: str,
