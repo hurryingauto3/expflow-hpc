@@ -1305,6 +1305,284 @@ class BaseExperimentManager(ABC):
             meta["status"] = "cancelled"
             self._save_metadata()
 
+    # =========================================================================
+    # Results Storage Integration (v0.8.0+)
+    # =========================================================================
+
+    @property
+    def results_storage(self):
+        """
+        Lazily initialize results storage
+
+        Returns:
+            ResultsStorage instance connected to experiments database
+        """
+        if not hasattr(self, '_results_storage'):
+            from .results_storage import ResultsStorage
+
+            # Use SQLite database in project root
+            db_path = self.project_root / "experiments_results.db"
+
+            self._results_storage = ResultsStorage(
+                backend='sqlite',
+                path=str(db_path)
+            )
+
+        return self._results_storage
+
+    def store_experiment_results(
+        self,
+        exp_id: str,
+        results: Dict[str, Any] = None,
+        auto_harvest: bool = True
+    ) -> bool:
+        """
+        Store experiment results in database
+
+        Args:
+            exp_id: Experiment identifier
+            results: Results dictionary (if None, will call harvest_results)
+            auto_harvest: If True and results is None, automatically harvest results
+
+        Returns:
+            True if successful, False otherwise
+
+        Example:
+            # Manual storage
+            results = {'accuracy': 0.95, 'loss': 0.05}
+            manager.store_experiment_results('exp_001', results)
+
+            # Auto-harvest and store
+            manager.store_experiment_results('exp_001', auto_harvest=True)
+        """
+        if exp_id not in self.metadata:
+            print(f"WARNING: Experiment {exp_id} not found in metadata")
+            return False
+
+        # Get experiment metadata
+        exp_meta = self.metadata[exp_id]
+
+        # Harvest results if not provided
+        if results is None and auto_harvest:
+            try:
+                results = self.harvest_results(exp_id)
+            except Exception as e:
+                print(f"WARNING: Could not harvest results for {exp_id}: {e}")
+                results = {}
+
+        # Build complete experiment data
+        exp_data = {
+            'exp_id': exp_id,
+            'status': exp_meta.get('status', 'unknown'),
+            'created_at': exp_meta.get('config', {}).get('created_at'),
+            'submitted_at': exp_meta.get('config', {}).get('submitted_at'),
+            'completed_at': exp_meta.get('config', {}).get('completed_at'),
+            'config': exp_meta.get('config', {}),
+            'slurm': {
+                'partition': exp_meta.get('config', {}).get('partition'),
+                'num_gpus': exp_meta.get('config', {}).get('num_gpus'),
+                'train_job_id': exp_meta.get('config', {}).get('train_job_id'),
+                'eval_job_id': exp_meta.get('config', {}).get('eval_job_id')
+            },
+            'git': {
+                'commit': exp_meta.get('config', {}).get('git_commit'),
+                'branch': exp_meta.get('config', {}).get('git_branch'),
+                'dirty': exp_meta.get('config', {}).get('git_dirty')
+            },
+            'results': results or {},
+            'stored_at': datetime.now().isoformat()
+        }
+
+        # Store in database
+        with self.results_storage as storage:
+            success = storage.store(exp_id, exp_data)
+
+        if success:
+            print(f"[OK] Stored results for {exp_id}")
+        else:
+            print(f"[ERROR] Failed to store results for {exp_id}")
+
+        return success
+
+    def collect_all_results(
+        self,
+        status_filter: str = 'completed',
+        force_reharvest: bool = False,
+        verbose: bool = True
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Unified results collection - replaces harvest/harvest-all commands
+
+        Automatically harvests results from all experiments and stores in database
+
+        Args:
+            status_filter: Only process experiments with this status ('completed', 'all', etc)
+            force_reharvest: If True, re-harvest even if already in database
+            verbose: If True, print progress
+
+        Returns:
+            Dictionary mapping exp_id to results
+
+        Example:
+            # Collect all completed experiments
+            all_results = manager.collect_all_results()
+
+            # Force re-harvest everything
+            all_results = manager.collect_all_results(
+                status_filter='all',
+                force_reharvest=True
+            )
+        """
+        results_collected = {}
+
+        # Filter experiments by status
+        experiments = []
+        for exp_id, meta in self.metadata.items():
+            exp_status = meta.get('status', 'unknown')
+
+            if status_filter == 'all' or exp_status == status_filter:
+                experiments.append(exp_id)
+
+        if not experiments:
+            if verbose:
+                print(f"No experiments found with status '{status_filter}'")
+            return {}
+
+        if verbose:
+            print(f"Collecting results from {len(experiments)} experiments...")
+
+        # Check which are already in database
+        with self.results_storage as storage:
+            for exp_id in experiments:
+                # Check if already stored
+                if not force_reharvest:
+                    existing = storage.get(exp_id)
+                    if existing:
+                        if verbose:
+                            print(f"  [SKIP] {exp_id} (already in database)")
+                        results_collected[exp_id] = existing.get('results', {})
+                        continue
+
+                # Harvest and store
+                if verbose:
+                    print(f"  [HARVEST] {exp_id}...")
+
+                try:
+                    results = self.harvest_results(exp_id)
+                    results_collected[exp_id] = results
+
+                    # Store in database
+                    success = self.store_experiment_results(
+                        exp_id,
+                        results=results,
+                        auto_harvest=False
+                    )
+
+                    if not success and verbose:
+                        print(f"    WARNING: Failed to store in database")
+
+                except Exception as e:
+                    if verbose:
+                        print(f"    ERROR: {e}")
+                    results_collected[exp_id] = {}
+
+        if verbose:
+            print(f"\n[OK] Collected results from {len(results_collected)} experiments")
+            print(f"     Database: {self.project_root / 'experiments_results.db'}")
+
+        return results_collected
+
+    def export_results_for_web(
+        self,
+        output_format: str = 'json',
+        output_path: str = None,
+        fields: List[str] = None,
+        filters: Dict[str, Any] = None
+    ):
+        """
+        Export results for web visualization
+
+        Args:
+            output_format: Export format ('json' or 'csv')
+            output_path: Output file path (auto-generated if None)
+            fields: List of fields to export (CSV only)
+            filters: Filters to apply (e.g., {'status': 'completed'})
+
+        Example:
+            # Export all results to JSON for static website
+            manager.export_results_for_web(
+                output_format='json',
+                output_path='public/experiments.json'
+            )
+
+            # Export specific fields to CSV
+            manager.export_results_for_web(
+                output_format='csv',
+                fields=['exp_id', 'status', 'results.pdm_score'],
+                filters={'status': 'completed'}
+            )
+        """
+        from .results_storage import export_to_json, export_to_csv
+
+        # Auto-generate output path if not provided
+        if output_path is None:
+            if output_format == 'json':
+                output_path = self.results_dir / "experiments_export.json"
+            else:
+                output_path = self.results_dir / "experiments_export.csv"
+
+        with self.results_storage as storage:
+            if output_format == 'json':
+                export_to_json(storage, str(output_path), filters)
+            elif output_format == 'csv':
+                export_to_csv(storage, str(output_path), fields, filters)
+            else:
+                raise ValueError(f"Unsupported format: {output_format}")
+
+        print(f"[OK] Exported results to {output_path}")
+
+    def query_results(
+        self,
+        metric: str = None,
+        n: int = 10,
+        filters: Dict[str, Any] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Query experiment results from database
+
+        Args:
+            metric: Metric to sort by (e.g., 'results.pdm_score')
+            n: Number of results to return
+            filters: Filters to apply
+
+        Returns:
+            List of experiment data dictionaries
+
+        Example:
+            # Get top 10 experiments by PDM score
+            best = manager.query_results(
+                metric='results.pdm_score',
+                n=10
+            )
+
+            # Get experiments on L40s partition
+            l40s_exps = manager.query_results(
+                filters={'slurm.partition': 'l40s_public'}
+            )
+        """
+        from .results_storage import ResultsQueryAPI
+
+        with self.results_storage as storage:
+            api = ResultsQueryAPI(storage)
+
+            if metric:
+                # Sort by metric
+                return api.best_experiments(metric, n=n, ascending=False)
+            else:
+                # Simple query
+                experiments = storage.query(**(filters or {}))
+                return experiments[:n]
+
     def prune_experiments(
         self,
         mode: str = "all",

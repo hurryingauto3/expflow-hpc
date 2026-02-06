@@ -12,7 +12,7 @@ long_description = readme_file.read_text() if readme_file.exists() else ""
 
 setup(
     name="expflow",
-    version="0.7.0",
+    version="0.8.0",
     author="Ali Hamza",
     author_email="ah7072@nyu.edu",
     description="Lightweight experiment tracking for HPC clusters",
@@ -44,6 +44,9 @@ setup(
     ],
     extras_require={
         "ai": ["google-generativeai>=0.3.0"],  # For Gemini API suggestions
+        "mongodb": ["pymongo>=4.0.0"],  # For MongoDB remote database backend
+        "postgresql": ["psycopg2-binary>=2.9.0"],  # For PostgreSQL remote database backend
+        "remote": ["pymongo>=4.0.0", "psycopg2-binary>=2.9.0"],  # Both remote backends
         "dev": ["pytest>=7.0", "black", "flake8", "mypy"],
     },
     entry_points={

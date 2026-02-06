@@ -595,6 +595,174 @@ def cmd_prune(args):
         )
 
 
+def cmd_results_collect(args):
+    """Collect all experiment results into database"""
+    try:
+        config = load_project_config()
+    except FileNotFoundError:
+        print("Error: Not in a project directory. Run 'expflow init' first.")
+        sys.exit(1)
+
+    print("[NOTE] This command requires a custom experiment manager")
+    print("       Use your manager's collect_all_results() method instead")
+    print("")
+    print("Example:")
+    print("  from navsim_manager import NavsimExperimentManager")
+    print("  manager = NavsimExperimentManager()")
+    print("  results = manager.collect_all_results(status_filter='completed')")
+
+
+def cmd_results_query(args):
+    """Query experiment results from database"""
+    try:
+        config = load_project_config()
+    except FileNotFoundError:
+        print("Error: Not in a project directory. Run 'expflow init' first.")
+        sys.exit(1)
+
+    from .results_storage import ResultsStorage, ResultsQueryAPI
+
+    project_root = Path(config.project_root)
+    db_path = project_root / "experiments_results.db"
+
+    if not db_path.exists():
+        print("Error: Results database not found")
+        print(f"       Expected: {db_path}")
+        print("")
+        print("Collect results first using your experiment manager:")
+        print("  manager.collect_all_results()")
+        sys.exit(1)
+
+    with ResultsStorage(backend='sqlite', path=str(db_path)) as storage:
+        api = ResultsQueryAPI(storage)
+
+        if args.metric:
+            # Query by metric
+            results = api.best_experiments(
+                metric=args.metric,
+                n=args.limit,
+                ascending=args.ascending
+            )
+        else:
+            # Simple query with filters
+            filters = {}
+            if args.status:
+                filters['status'] = args.status
+            if args.partition:
+                filters['slurm.partition'] = args.partition
+
+            experiments = storage.query(**filters)
+            results = experiments[:args.limit]
+
+    if not results:
+        print("No experiments found matching criteria")
+        return
+
+    # Display results
+    print(f"\nFound {len(results)} experiments:")
+    print(f"{'='*80}")
+
+    for i, exp in enumerate(results, 1):
+        exp_id = exp.get('exp_id', 'unknown')
+        status = exp.get('status', 'unknown')
+        partition = exp.get('slurm', {}).get('partition', 'unknown')
+
+        print(f"\n{i}. {exp_id}")
+        print(f"   Status: {status}")
+        print(f"   Partition: {partition}")
+
+        # Show metric if specified
+        if args.metric:
+            metric_value = api._get_nested_value(exp, args.metric)
+            if metric_value is not None:
+                print(f"   {args.metric}: {metric_value}")
+
+        # Show all results if verbose
+        if args.verbose:
+            results_data = exp.get('results', {})
+            if results_data:
+                print(f"   Results: {json.dumps(results_data, indent=4)}")
+
+    print(f"\n{'='*80}")
+    print(f"Database: {db_path}")
+
+
+def cmd_results_export(args):
+    """Export results for web visualization"""
+    try:
+        config = load_project_config()
+    except FileNotFoundError:
+        print("Error: Not in a project directory. Run 'expflow init' first.")
+        sys.exit(1)
+
+    from .results_storage import ResultsStorage, export_to_json, export_to_csv
+
+    project_root = Path(config.project_root)
+    db_path = project_root / "experiments_results.db"
+
+    if not db_path.exists():
+        print("Error: Results database not found")
+        print(f"       Expected: {db_path}")
+        sys.exit(1)
+
+    # Build filters
+    filters = {}
+    if args.status:
+        filters['status'] = args.status
+
+    with ResultsStorage(backend='sqlite', path=str(db_path)) as storage:
+        if args.format == 'json':
+            export_to_json(storage, args.output, filters)
+        elif args.format == 'csv':
+            fields = args.fields.split(',') if args.fields else None
+            export_to_csv(storage, args.output, fields, filters)
+
+    print(f"[OK] Exported to: {args.output}")
+    print("")
+    print("Next steps for web visualization:")
+    print("  1. For static website: See SQLITE_AND_WEB_GUIDE.md (Path 1)")
+    print("  2. For Streamlit dashboard: See SQLITE_AND_WEB_GUIDE.md (Path 2)")
+    print("  3. For full web app: See SQLITE_AND_WEB_GUIDE.md (Path 3)")
+
+
+def cmd_results_stats(args):
+    """Show statistics for experiment metrics"""
+    try:
+        config = load_project_config()
+    except FileNotFoundError:
+        print("Error: Not in a project directory. Run 'expflow init' first.")
+        sys.exit(1)
+
+    from .results_storage import ResultsStorage, ResultsQueryAPI
+
+    project_root = Path(config.project_root)
+    db_path = project_root / "experiments_results.db"
+
+    if not db_path.exists():
+        print("Error: Results database not found")
+        sys.exit(1)
+
+    with ResultsStorage(backend='sqlite', path=str(db_path)) as storage:
+        api = ResultsQueryAPI(storage)
+
+        # Get statistics for each metric
+        for metric in args.metrics:
+            stats = api.get_statistics(metric)
+
+            if not stats:
+                print(f"\nMetric: {metric}")
+                print("  No data found")
+                continue
+
+            print(f"\nMetric: {metric}")
+            print(f"  Count: {stats['count']}")
+            print(f"  Min: {stats['min']:.4f}")
+            print(f"  Max: {stats['max']:.4f}")
+            print(f"  Mean: {stats['mean']:.4f}")
+            print(f"  Median: {stats['median']:.4f}")
+            print(f"  StdDev: {stats['stdev']:.4f}")
+
+
 def main():
     """Main CLI entry point"""
     parser = argparse.ArgumentParser(
@@ -610,6 +778,8 @@ Examples:
   expflow tail exp001               # Follow logs in real-time
   expflow cancel exp001             # Cancel running jobs
   expflow prune --dry-run           # Preview cleanup of duplicates/invalid experiments
+  expflow results query --metric results.pdm_score --limit 10  # Query best experiments
+  expflow results export --format json --output web/data.json  # Export for web
 
 For full docs: https://github.com/hurryingauto3/expflow-hpc
         """,
@@ -763,6 +933,92 @@ Examples:
         help="Require checkpoint with at least this many epochs"
     )
 
+    # Results commands (v0.8.0+)
+    results_parser = subparsers.add_parser(
+        "results",
+        help="Manage experiment results database (v0.8.0)"
+    )
+    results_subparsers = results_parser.add_subparsers(
+        dest="results_command",
+        help="Results management commands"
+    )
+
+    # results collect
+    results_collect_parser = results_subparsers.add_parser(
+        "collect",
+        help="Collect all experiment results into database"
+    )
+
+    # results query
+    results_query_parser = results_subparsers.add_parser(
+        "query",
+        help="Query experiments from database"
+    )
+    results_query_parser.add_argument(
+        "--metric",
+        help="Sort by metric (e.g., 'results.pdm_score')"
+    )
+    results_query_parser.add_argument(
+        "--status",
+        help="Filter by status"
+    )
+    results_query_parser.add_argument(
+        "--partition",
+        help="Filter by partition"
+    )
+    results_query_parser.add_argument(
+        "--limit",
+        type=int,
+        default=10,
+        help="Number of results to show (default: 10)"
+    )
+    results_query_parser.add_argument(
+        "--ascending",
+        action="store_true",
+        help="Sort ascending (default: descending)"
+    )
+    results_query_parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="Show detailed results"
+    )
+
+    # results export
+    results_export_parser = results_subparsers.add_parser(
+        "export",
+        help="Export results for web visualization"
+    )
+    results_export_parser.add_argument(
+        "--format",
+        choices=["json", "csv"],
+        default="json",
+        help="Export format (default: json)"
+    )
+    results_export_parser.add_argument(
+        "--output",
+        default="experiments_export.json",
+        help="Output file path"
+    )
+    results_export_parser.add_argument(
+        "--status",
+        help="Filter by status"
+    )
+    results_export_parser.add_argument(
+        "--fields",
+        help="Comma-separated fields for CSV export (e.g., 'exp_id,status,results.pdm_score')"
+    )
+
+    # results stats
+    results_stats_parser = results_subparsers.add_parser(
+        "stats",
+        help="Show statistics for experiment metrics"
+    )
+    results_stats_parser.add_argument(
+        "metrics",
+        nargs="+",
+        help="Metrics to analyze (e.g., 'results.pdm_score' 'results.val_loss')"
+    )
+
     args = parser.parse_args()
 
     if not args.command:
@@ -794,6 +1050,18 @@ Examples:
         cmd_cancel(args)
     elif args.command == "prune":
         cmd_prune(args)
+    elif args.command == "results":
+        if args.results_command == "collect":
+            cmd_results_collect(args)
+        elif args.results_command == "query":
+            cmd_results_query(args)
+        elif args.results_command == "export":
+            cmd_results_export(args)
+        elif args.results_command == "stats":
+            cmd_results_stats(args)
+        else:
+            print("Use: expflow results {collect|query|export|stats}")
+            sys.exit(1)
 
 
 if __name__ == "__main__":

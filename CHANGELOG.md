@@ -5,6 +5,111 @@ All notable changes to ExpFlow will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-02-06
+
+### Added - Database Integration and Unified Results System
+
+**Major Features:**
+
+- **Results Storage System** (`src/expflow/results_storage.py`)
+  - SQLite backend for experiment results (default, zero dependencies)
+  - Abstract backend architecture for future MongoDB/PostgreSQL support
+  - Query API for advanced experiment searches and filtering
+  - Export utilities (JSON, CSV) for web visualization
+  - Context manager support for database connections
+  - Post-query filtering with comparison operators: `>=`, `>`, `<=`, `<`, `==`
+  - Nested field queries with dot notation: `results.pdm_score`, `slurm.partition`
+
+- **Unified Results Collection**
+  - `collect_all_results()` method in BaseExperimentManager
+  - Automatic harvesting and database storage
+  - Replaces manual harvest/harvest-all workflow
+  - Status filtering and force re-harvest capabilities
+  - Stores complete experiment metadata (config, SLURM, git, results)
+
+- **CLI Commands** (`expflow results`)
+  - `expflow results query` - Query experiments from database with filters
+  - `expflow results export` - Export for web visualization (JSON/CSV)
+  - `expflow results stats` - Show statistical summary for metrics
+  - Rich filtering by status, partition, metrics, dates
+
+- **Web Visualization Support**
+  - Export script (`examples/export_for_web.py`) with comprehensive options
+  - HTML template with Chart.js visualization (`examples/web_template.html`)
+  - Comprehensive migration guide (SQLITE_AND_WEB_GUIDE.md)
+  - Three deployment paths:
+    - Path 1: Static website (GitHub Pages)
+    - Path 2: Streamlit dashboard
+    - Path 3: Full web app (FastAPI + React)
+
+**BaseExperimentManager Integration:**
+
+- Lazy-loaded `results_storage` property
+- `store_experiment_results()` - Store single experiment with auto-harvest
+- `collect_all_results()` - Unified results collection (replaces harvest-all)
+- `export_results_for_web()` - Export to JSON/CSV for visualization
+- `query_results()` - Query experiments from database
+
+**ResultsQueryAPI Methods:**
+
+- `best_experiments()` - Get top N by metric
+- `search()` - Advanced search with multiple filters
+- `compare_experiments()` - Side-by-side comparison
+- `get_statistics()` - Calculate min/max/mean/median/stdev
+
+**Export Utilities:**
+
+- `export_to_json()` - Export to JSON with pretty-print option
+- `export_to_csv()` - Export to CSV with custom fields
+- Filter support for status, partition, metrics
+- Automatic output path generation
+
+### Changed
+
+- `setup.py`: Version bumped to 0.8.0
+- `src/expflow/__init__.py`: Version bumped to 0.8.0, added results_storage exports
+- CLI help text updated with results command examples
+
+### Technical Details
+
+- **Database location**: `{project_root}/experiments_results.db`
+- **Storage format**: JSON-serialized experiment data in SQLite
+- **Query performance**: Post-query filtering in Python (fast for typical use: hundreds of experiments)
+- **Export formats**: JSON (pretty-print), CSV (custom fields)
+- **Field access**: Dot notation for nested fields: `results.pdm_score`, `slurm.partition`, `git.commit`
+
+### Use Cases
+
+- **Research dissemination**: Export results for conference papers and publications
+- **Interactive dashboards**: Build Streamlit apps for live experiment tracking
+- **Comparative analysis**: Query top experiments by metric across partitions
+- **Statistical analysis**: Calculate statistics for metrics across experiments
+- **Web visualization**: Deploy static websites with experiment results
+- **Data export**: Export to CSV for analysis in Excel/pandas/Tableau
+
+### Migration Notes
+
+Users can now:
+1. Replace manual harvest scripts with `collect_all_results()`
+2. Query experiments without parsing JSON files
+3. Export results for web with single command
+4. Build interactive dashboards using exported data
+5. Perform statistical analysis on metrics
+
+### Documentation
+
+- Added **SQLITE_AND_WEB_GUIDE.md** - Comprehensive web migration guide
+- Updated **FEATURE_PROPOSAL_v0.8.md** with implementation status
+- Added **CHANGELOG.md** v0.8.0 entry with complete feature list
+
+### Examples
+
+- `examples/export_for_web.py` - Customizable export script
+- `examples/web_template.html` - Complete visualization template with Chart.js
+- CLI examples in help text
+
+---
+
 ## [0.7.0] - 2026-02-04
 
 ### Added
