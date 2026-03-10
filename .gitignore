@@ -45,3 +45,4 @@ htmlcov/
 # Archive (old files, not for git)
 .archive/
 .archive_list.txt
+scripts/

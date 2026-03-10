@@ -75,6 +75,48 @@ class ExperimentMetadata:
     resume_count: int = 0  # Number of times this experiment has been resumed
 
 
+@dataclass
+class ConsistencyReport:
+    """Result of validate_consistency() — describes YAML/JSON/filesystem alignment"""
+    missing_yaml: List[str]          # In metadata but no YAML config file
+    orphan_yaml: List[str]           # YAML file exists but not registered in metadata
+    stale_config_copy: List[str]     # Metadata entries with embedded "config" key (old format)
+    broken_script_paths: List[str]   # Script paths in metadata pointing to missing files
+    ok: bool                         # True when all lists are empty
+
+    def __str__(self) -> str:
+        if self.ok:
+            return "Consistency: [OK] all checks passed"
+        lines = ["Consistency: issues found"]
+        if self.missing_yaml:
+            lines.append(f"  missing_yaml ({len(self.missing_yaml)}): {', '.join(self.missing_yaml[:5])}"
+                         + ("..." if len(self.missing_yaml) > 5 else ""))
+        if self.orphan_yaml:
+            lines.append(f"  orphan_yaml ({len(self.orphan_yaml)}): {', '.join(self.orphan_yaml[:5])}"
+                         + ("..." if len(self.orphan_yaml) > 5 else ""))
+        if self.stale_config_copy:
+            lines.append(f"  stale_config_copy ({len(self.stale_config_copy)}): "
+                         + f"{', '.join(self.stale_config_copy[:5])}"
+                         + ("..." if len(self.stale_config_copy) > 5 else ""))
+        if self.broken_script_paths:
+            lines.append(f"  broken_script_paths ({len(self.broken_script_paths)}): "
+                         + f"{', '.join(self.broken_script_paths[:5])}"
+                         + ("..." if len(self.broken_script_paths) > 5 else ""))
+        return "\n".join(lines)
+
+
+@dataclass
+class BatchPreview:
+    """Preview result from preview_batch() before submitting"""
+    total_experiments: int
+    total_gpus: int
+    estimated_gpu_hours: float
+    partition_summary: Dict[str, int]   # partition -> experiment count
+    ready: List[str]                    # exp_ids with YAML config present
+    not_ready: List[str]                # exp_ids missing config or not registered
+    warnings: List[str]
+
+
 # =============================================================================
 # Base Experiment Manager
 # =============================================================================
@@ -137,8 +179,12 @@ class BaseExperimentManager(ABC):
         if self.metadata_db.exists():
             with open(self.metadata_db, 'r') as f:
                 data = json.load(f)
-                # Note: Subclass should handle config reconstruction
                 self.metadata = data
+            # Warn once if old-format entries (with embedded "config" key) are detected
+            stale = [eid for eid, entry in self.metadata.items() if "config" in entry]
+            if stale:
+                print(f"WARNING: {len(stale)} metadata entries are in old format "
+                      f"(embedded 'config' copy). Run manager.sync_metadata() to migrate.")
         else:
             self.metadata = {}
 
@@ -179,6 +225,97 @@ class BaseExperimentManager(ABC):
                 "git_branch": None,
                 "git_dirty": None
             }
+
+    # =========================================================================
+    # Config / Metadata Unified Access
+    # =========================================================================
+
+    def _load_config(self, exp_id: str) -> Dict[str, Any]:
+        """
+        Load fresh experiment config from its YAML file.
+
+        This is the authoritative way to read experiment parameters.
+        Raises FileNotFoundError if the YAML does not exist.
+        """
+        config_path = self.configs_dir / f"{exp_id}.yaml"
+        if not config_path.exists():
+            raise FileNotFoundError(
+                f"Config YAML not found for {exp_id}: {config_path}"
+            )
+        with open(config_path, 'r') as f:
+            return yaml.safe_load(f) or {}
+
+    def get_experiment_record(self, exp_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get a complete experiment record by merging YAML config and JSON runtime state.
+
+        YAML config is the source of truth for experiment parameters.
+        JSON metadata holds runtime state (status, job IDs, results, etc.).
+        JSON state keys take precedence when both have the same key.
+
+        Returns None if the experiment is not registered in metadata.
+        """
+        if exp_id not in self.metadata:
+            return None
+        state = self.metadata[exp_id]
+        try:
+            config = self._load_config(exp_id)
+        except FileNotFoundError:
+            # Fall back to embedded config copy if YAML is missing (old-format support)
+            config = state.get("config", {})
+        return {**config, **{k: v for k, v in state.items() if k != "config"}}
+
+    def sync_metadata(self, dry_run: bool = False) -> Dict[str, Any]:
+        """
+        Migrate metadata database from old format (embedded "config" copy) to new format.
+
+        New format: JSON stores runtime state only; YAML is the config source of truth.
+
+        For each experiment with an embedded "config" key:
+        - If the YAML file already exists: drop the embedded copy from JSON.
+        - If no YAML exists: write one from the embedded copy, then drop the copy.
+
+        This method is idempotent — safe to run multiple times.
+
+        Args:
+            dry_run: If True, show what would change without modifying files.
+
+        Returns:
+            {"migrated": [...], "skipped": [...], "warnings": [...]}
+        """
+        migrated = []
+        skipped = []
+        warnings = []
+
+        for exp_id, entry in self.metadata.items():
+            if "config" not in entry:
+                skipped.append(exp_id)
+                continue
+
+            embedded_config = entry["config"]
+            config_path = self.configs_dir / f"{exp_id}.yaml"
+
+            if not config_path.exists():
+                if dry_run:
+                    print(f"  [DRY RUN] Would write YAML for {exp_id} (missing) and strip config copy")
+                else:
+                    with open(config_path, 'w') as f:
+                        yaml.dump(embedded_config, f, default_flow_style=False, sort_keys=False)
+                warnings.append(exp_id)
+            else:
+                if dry_run:
+                    print(f"  [DRY RUN] Would strip config copy from metadata for {exp_id}")
+
+            if not dry_run:
+                del entry["config"]
+            migrated.append(exp_id)
+
+        if not dry_run and migrated:
+            self._save_metadata()
+
+        print(f"sync_metadata: migrated={len(migrated)}, skipped={len(skipped)}, "
+              f"yaml_written={len(warnings)}")
+        return {"migrated": migrated, "skipped": skipped, "warnings": warnings}
 
     @abstractmethod
     def _generate_train_script(self, config: Any) -> str:
@@ -225,13 +362,22 @@ class BaseExperimentManager(ABC):
 
     def _generate_conda_activation(self, config: Dict[str, Any]) -> str:
         """
-        Generate conda/environment activation commands
+        Generate conda/environment activation commands with fallback support
+
+        This enhanced version includes fallback logic for HPC environments
+        where conda may be provided via modules instead of a direct path.
 
         Args:
             config: Experiment configuration
 
         Returns:
             Shell commands for environment activation
+
+        Example:
+            # With conda_root specified
+            script = manager._generate_conda_activation(config)
+
+            # Falls back to module-provided conda if path doesn't exist
         """
         conda_root = config.get('conda_root', self.hpc_config.conda_root)
         conda_env = config.get('conda_env', self.hpc_config.conda_env)
@@ -244,17 +390,22 @@ class BaseExperimentManager(ABC):
             for module in module_loads:
                 script_lines.append(f"module load {module}")
 
-        # Conda activation
+        # Conda activation with robust fallback logic
         if conda_root and conda_env:
-            conda_sh = f"{conda_root}/etc/profile.d/conda.sh"
             script_lines.extend([
-                f"# Activate conda environment",
-                f"if [ -f \"{conda_sh}\" ]; then",
-                f"    source \"{conda_sh}\"",
-                f"    conda activate {conda_env}",
-                f"else",
-                f"    echo \"Warning: Conda not found at {conda_root}\"",
-                f"fi"
+                f'CONDA_ROOT="{conda_root}"',
+                'if [ -f "${CONDA_ROOT}/etc/profile.d/conda.sh" ]; then',
+                '    # Use specified conda installation',
+                '    source "${CONDA_ROOT}/etc/profile.d/conda.sh"',
+                f'    conda activate {conda_env}',
+                'else',
+                '    # Fallback: try module-provided conda',
+                '    echo "Warning: Conda not found at ${CONDA_ROOT}, trying module fallback..."',
+                '    module purge || true',
+                '    module load anaconda3/2025.06 || module load anaconda3 || true',
+                '    source $(conda info --base)/etc/profile.d/conda.sh 2>/dev/null || true',
+                f'    conda activate {conda_env} || echo "ERROR: Could not activate {conda_env}"',
+                'fi'
             ])
         elif module_loads and conda_env:
             # Assume module provides conda
@@ -523,6 +674,43 @@ class BaseExperimentManager(ABC):
 
         return nccl_vars
 
+    def _generate_nccl_exports(
+        self,
+        partition: Optional[str] = None,
+        preset: Optional[str] = None
+    ) -> str:
+        """
+        Generate NCCL environment variable export statements
+
+        Utility method that generates shell export statements from NCCL configuration.
+        Useful for including in SLURM scripts.
+
+        Args:
+            partition: SLURM partition (for auto-detection)
+            preset: NCCL preset name ('h200', 'a100', 'l40s', 'rtx8000')
+
+        Returns:
+            Shell export statements as string
+
+        Example:
+            # In script generation
+            nccl_exports = manager._generate_nccl_exports(partition='l40s_public')
+            # Returns:
+            # export NCCL_IB_DISABLE=0
+            # export NCCL_P2P_LEVEL=SYS
+            # export NCCL_NET_GDR_LEVEL=1
+        """
+        nccl_vars = self._get_nccl_env_vars(partition=partition, preset=preset)
+
+        if not nccl_vars:
+            return "# No NCCL optimizations configured"
+
+        lines = ["# NCCL optimizations (auto-detected from partition)"]
+        for key, value in nccl_vars.items():
+            lines.append(f"export {key}={value}")
+
+        return "\n".join(lines)
+
     def _substitute_env_vars(
         self,
         template: str,
@@ -562,6 +750,45 @@ class BaseExperimentManager(ABC):
             result = result.replace(f"${{{key}}}", str(value))
 
         return result
+
+    # =========================================================================
+    # HPC Configuration Helpers
+    # =========================================================================
+
+    def _get_overlay_path(self, cache_name: str) -> str:
+        """
+        Get the path to a SquashFS overlay file
+
+        Args:
+            cache_name: Name of the cache (without .sqsh extension)
+
+        Returns:
+            Full path to overlay file
+
+        Example:
+            overlay_path = manager._get_overlay_path('training_cache_v2')
+            # Returns: /scratch/user/cache/overlays/training_cache_v2.sqsh
+        """
+        overlay_dir = getattr(
+            self.hpc_config,
+            'overlay_cache_dir',
+            f"{self.hpc_config.cache_dir}/overlays"
+        )
+        return f"{overlay_dir}/{cache_name}.sqsh"
+
+    def _get_container_image(self) -> Optional[str]:
+        """
+        Get the configured container image path
+
+        Returns:
+            Path to Apptainer/Singularity image or None if not configured
+
+        Example:
+            image = manager._get_container_image()
+            if image:
+                # Use container
+        """
+        return getattr(self.hpc_config, 'container_image', None)
 
     # =========================================================================
     # Checkpoint Registry (v0.7.0+)
@@ -704,10 +931,9 @@ class BaseExperimentManager(ABC):
         with open(config_path, 'w') as f:
             yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
 
-        # Create metadata entry
+        # Create metadata entry — config lives in YAML only; JSON holds runtime state
         self.metadata[exp_id] = {
             "exp_id": exp_id,
-            "config": config_dict,
             "status": "created",
             "train_script_path": None,
             "eval_script_path": None,
@@ -736,12 +962,9 @@ class BaseExperimentManager(ABC):
             sys.exit(1)
 
         meta = self.metadata[exp_id]
-        config = meta["config"]
 
-        # Load full config for script generation
-        config_path = self.configs_dir / f"{exp_id}.yaml"
-        with open(config_path) as f:
-            full_config = yaml.safe_load(f)
+        # Load fresh config from YAML (single source of truth)
+        full_config = self._load_config(exp_id)
 
         # Generate scripts
         train_script_path = self.generated_dir / f"train_{exp_id}.slurm"
@@ -821,10 +1044,10 @@ class BaseExperimentManager(ABC):
         for exp_id, meta in self.metadata.items():
             if status and meta.get("status") != status:
                 continue
-            config = meta.get("config", {})
-            if tags and not any(tag in config.get("tags", []) for tag in tags):
+            record = self.get_experiment_record(exp_id) or {}
+            if tags and not any(tag in record.get("tags", []) for tag in tags):
                 continue
-            filtered.append((exp_id, meta))
+            filtered.append((exp_id, meta, record))
 
         if not filtered:
             print("No experiments found")
@@ -834,9 +1057,9 @@ class BaseExperimentManager(ABC):
         print(f"{'ID':<15} {'Status':<12} {'Description':<50}")
         print("-" * 80)
 
-        for exp_id, meta in sorted(filtered, key=lambda x: x[0]):
-            config = meta.get("config", {})
-            desc = config.get("description", "")[:47] + "..." if len(config.get("description", "")) > 50 else config.get("description", "")
+        for exp_id, meta, record in sorted(filtered, key=lambda x: x[0]):
+            raw_desc = record.get("description", "")
+            desc = raw_desc[:47] + "..." if len(raw_desc) > 50 else raw_desc
             status_str = meta.get("status", "unknown")
             print(f"{exp_id:<15} {status_str:<12} {desc:<50}")
 
@@ -848,17 +1071,24 @@ class BaseExperimentManager(ABC):
             sys.exit(1)
 
         meta = self.metadata[exp_id]
-        config = meta.get("config", {})
+        record = self.get_experiment_record(exp_id) or {}
 
         print(f"\n{'='*70}")
         print(f"Experiment: {exp_id}")
         print(f"{'='*70}")
-        print(f"\nDescription: {config.get('description', 'N/A')}")
+        print(f"\nDescription: {record.get('description', 'N/A')}")
         print(f"Status: {meta.get('status', 'unknown')}")
 
+        state_keys = {
+            "exp_id", "description", "created_at", "submitted_at", "completed_at",
+            "status", "train_script_path", "eval_script_path", "run_id",
+            "results", "resume_from_exp_id", "resume_checkpoint_path",
+            "resume_epoch", "resume_count", "train_job_id", "eval_job_id",
+            "eval_job_ids", "cancelled_at"
+        }
         print(f"\nConfiguration:")
-        for key, value in config.items():
-            if key not in ["exp_id", "description", "created_at", "submitted_at", "completed_at"]:
+        for key, value in record.items():
+            if key not in state_keys:
                 print(f"  {key}: {value}")
 
         if meta.get("results"):
@@ -867,16 +1097,16 @@ class BaseExperimentManager(ABC):
                 print(f"  {key}: {value}")
 
         print(f"\nTimeline:")
-        print(f"  Created: {config.get('created_at', 'N/A')}")
+        print(f"  Created: {record.get('created_at', 'N/A')}")
         if meta.get("submitted_at"):
             print(f"  Submitted: {meta['submitted_at']}")
         if meta.get("completed_at"):
             print(f"  Completed: {meta['completed_at']}")
 
-        if config.get("git_commit"):
+        if record.get("git_commit"):
             print(f"\nGit:")
-            print(f"  Commit: {config['git_commit'][:8]}")
-            print(f"  Branch: {config.get('git_branch', 'N/A')}")
+            print(f"  Commit: {record['git_commit'][:8]}")
+            print(f"  Branch: {record.get('git_branch', 'N/A')}")
 
         print(f"\n{'='*70}\n")
 
@@ -890,14 +1120,14 @@ class BaseExperimentManager(ABC):
 
         records = []
         for exp_id, meta in self.metadata.items():
-            config = meta.get("config", {})
+            r = self.get_experiment_record(exp_id) or {}
             record = {
                 "exp_id": exp_id,
-                "description": config.get("description", ""),
+                "description": r.get("description", ""),
                 "status": meta.get("status", "unknown"),
-                "partition": config.get("partition", ""),
-                "num_gpus": config.get("num_gpus", 0),
-                "created_at": config.get("created_at", ""),
+                "partition": r.get("partition", ""),
+                "num_gpus": r.get("num_gpus", 0),
+                "created_at": r.get("created_at", ""),
                 "submitted_at": meta.get("submitted_at", ""),
                 "completed_at": meta.get("completed_at", ""),
                 **meta.get("results", {})
@@ -1061,7 +1291,7 @@ class BaseExperimentManager(ABC):
             sys.exit(1)
 
         source_meta = self.metadata[source_exp_id]
-        source_config = source_meta.get("config", {})
+        source_config = self._load_config(source_exp_id) if (self.configs_dir / f"{source_exp_id}.yaml").exists() else source_meta.get("config", {})
 
         # Find checkpoint
         if checkpoint_path is None:
@@ -1119,10 +1349,9 @@ class BaseExperimentManager(ABC):
         with open(config_path, 'w') as f:
             yaml.dump(new_config, f, default_flow_style=False, sort_keys=False)
 
-        # Create metadata entry
+        # Create metadata entry — config lives in YAML; resume fields stay in JSON state
         self.metadata[new_exp_id] = {
             "exp_id": new_exp_id,
-            "config": new_config,
             "status": "created",
             "train_script_path": None,
             "eval_script_path": None,
@@ -1193,13 +1422,13 @@ class BaseExperimentManager(ABC):
 
         sorted_exps = sorted(
             self.metadata.items(),
-            key=lambda x: x[1].get("config", {}).get("created_at", ""),
+            key=lambda x: (self.get_experiment_record(x[0]) or {}).get("created_at", ""),
             reverse=True
         )[:10]
 
         for exp_id, meta in sorted_exps:
-            config = meta.get("config", {})
-            desc = config.get("description", "")[:30]
+            record = self.get_experiment_record(exp_id) or {}
+            desc = record.get("description", "")[:30]
             train_job = meta.get("train_job_id", "-")
             eval_job = meta.get("eval_job_id", "-")
             status = meta.get("status", "unknown")
@@ -1268,42 +1497,121 @@ class BaseExperimentManager(ABC):
         except KeyboardInterrupt:
             print("\n[Stopped]")
 
-    def cancel(self, exp_id: str, job_type: Optional[str] = None):
-        """Cancel running jobs for an experiment"""
+    def cancel(
+        self,
+        exp_id: str,
+        job_type: Optional[str] = None,
+        include_matching_name: bool = True,
+        dry_run: bool = False
+    ) -> List[str]:
+        """
+        Cancel all SLURM jobs related to an experiment
+
+        Enhanced version that finds jobs from metadata AND live SLURM queue.
+        This catches jobs even if metadata is incomplete or outdated.
+
+        Args:
+            exp_id: Experiment ID
+            job_type: Deprecated - kept for backward compatibility (ignored if include_matching_name=True)
+            include_matching_name: If True, also cancel live SLURM jobs matching exp_id
+            dry_run: If True, show what would be canceled without actually canceling
+
+        Returns:
+            List of canceled job IDs
+
+        Example:
+            # Cancel all jobs for experiment (from metadata + live queue)
+            manager.cancel('exp_b20')
+
+            # Preview what would be canceled
+            manager.cancel('exp_b20', dry_run=True)
+
+            # Only cancel from metadata (old behavior)
+            manager.cancel('exp_b20', include_matching_name=False)
+        """
         if exp_id not in self.metadata:
-            print(f"Error: Experiment {exp_id} not found")
-            return
+            print(f"Warning: Experiment {exp_id} not found in metadata")
+            # Continue anyway - might find jobs in live queue
 
-        meta = self.metadata[exp_id]
-        cancelled = []
+        job_ids = set()
+        meta = self.metadata.get(exp_id, {})
 
-        jobs_to_cancel = []
-        if job_type in (None, "train") and meta.get("train_job_id"):
-            jobs_to_cancel.append(("train", meta["train_job_id"]))
-        if job_type in (None, "eval") and meta.get("eval_job_id"):
-            jobs_to_cancel.append(("eval", meta["eval_job_id"]))
+        # Collect job IDs from metadata
+        train_job = meta.get("train_job_id")
+        eval_job = meta.get("eval_job_id")
+        eval_jobs = meta.get("eval_job_ids", [])  # Support multiple eval jobs
 
-        if not jobs_to_cancel:
-            print(f"No jobs to cancel for {exp_id}")
-            return
+        for jid in [train_job, eval_job]:
+            if jid:
+                job_ids.add(str(jid))
 
-        for jtype, job_id in jobs_to_cancel:
+        for jid in eval_jobs or []:
+            if jid:
+                job_ids.add(str(jid))
+
+        # Smart job name matching helper
+        def _is_related_job(name: str) -> bool:
+            """Check if job name is related to exp_id"""
+            if name == exp_id:
+                return True
+            if not name.startswith(exp_id):
+                return False
+            if len(name) == len(exp_id):
+                return True
+            # Allow common separators: exp_b20_eval, exp_b20-train, exp_b20.1
+            return name[len(exp_id)] in {"_", "-", "."}
+
+        # Query live SLURM queue for matching job names
+        if include_matching_name:
             try:
                 result = subprocess.run(
-                    ["scancel", job_id],
-                    capture_output=True, text=True
+                    ["squeue", "-u", os.environ.get("USER", ""), "-h", "-o", "%i %j"],
+                    capture_output=True,
+                    text=True,
+                    check=True
                 )
-                if result.returncode == 0:
-                    cancelled.append(f"{jtype} ({job_id})")
-                else:
-                    print(f"  Warning: Could not cancel {jtype} job {job_id}")
-            except Exception as e:
-                print(f"  Error cancelling {jtype} job: {e}")
+                for line in result.stdout.strip().split("\n"):
+                    if not line.strip():
+                        continue
+                    parts = line.split(maxsplit=1)
+                    if len(parts) != 2:
+                        continue
+                    jid, name = parts[0].strip(), parts[1].strip()
+                    if _is_related_job(name):
+                        job_ids.add(jid)
+            except subprocess.CalledProcessError as e:
+                print(f"Warning: Could not query squeue: {e.stderr}")
 
-        if cancelled:
-            print(f"Cancelled jobs for {exp_id}: {', '.join(cancelled)}")
+        if not job_ids:
+            print(f"No related SLURM jobs found for {exp_id}")
+            return []
+
+        job_ids_list = sorted(job_ids)
+
+        # Dry run mode
+        if dry_run:
+            print(f"[DRY RUN] Would cancel {len(job_ids_list)} jobs for {exp_id}:")
+            for jid in job_ids_list:
+                print(f"  {jid}")
+            return job_ids_list
+
+        # Cancel jobs
+        try:
+            subprocess.run(["scancel", *job_ids_list], check=True)
+            print(f"[OK] Canceled {len(job_ids_list)} jobs for {exp_id}")
+            if len(job_ids_list) <= 10:
+                print(f"     Job IDs: {' '.join(job_ids_list)}")
+        except subprocess.CalledProcessError as e:
+            print(f"[ERROR] Failed to cancel jobs: {e.stderr}")
+            return []
+
+        # Update metadata
+        if exp_id in self.metadata:
             meta["status"] = "cancelled"
+            meta["cancelled_at"] = datetime.now().isoformat()
             self._save_metadata()
+
+        return job_ids_list
 
     # =========================================================================
     # Results Storage Integration (v0.8.0+)
@@ -1312,21 +1620,87 @@ class BaseExperimentManager(ABC):
     @property
     def results_storage(self):
         """
-        Lazily initialize results storage
+        Lazily initialize results storage with multi-backend support
+
+        Supports:
+        - SQLite (default): Local file-based storage
+        - MongoDB: Remote cloud database (requires pymongo)
+        - PostgreSQL: Remote SQL database (requires psycopg2-binary)
+
+        Backend is selected via environment variables:
+        - EXPFLOW_BACKEND: 'sqlite', 'mongodb', or 'postgresql' (default: 'sqlite')
+        - EXPFLOW_CONNECTION_STRING: Connection string for remote databases
+        - EXPFLOW_MONGODB_TLS_INSECURE: Set to '1' to bypass TLS cert validation (HPC environments)
 
         Returns:
             ResultsStorage instance connected to experiments database
+
+        Example:
+            # SQLite (default)
+            manager.results_storage
+
+            # MongoDB
+            os.environ['EXPFLOW_BACKEND'] = 'mongodb'
+            os.environ['EXPFLOW_CONNECTION_STRING'] = 'mongodb+srv://user:pass@cluster.mongodb.net/'
+            manager.results_storage
+
+            # MongoDB with TLS bypass (for HPC)
+            os.environ['EXPFLOW_MONGODB_TLS_INSECURE'] = '1'
+            manager.results_storage
         """
         if not hasattr(self, '_results_storage'):
             from .results_storage import ResultsStorage
+            import os
 
-            # Use SQLite database in project root
-            db_path = self.project_root / "experiments_results.db"
+            # Get backend configuration from environment
+            backend = os.getenv('EXPFLOW_BACKEND', 'sqlite')
+            connection_string = os.getenv('EXPFLOW_CONNECTION_STRING')
 
-            self._results_storage = ResultsStorage(
-                backend='sqlite',
-                path=str(db_path)
-            )
+            if backend == 'mongodb':
+                # MongoDB backend (remote)
+                if not connection_string:
+                    raise ValueError(
+                        "EXPFLOW_CONNECTION_STRING required for MongoDB backend. "
+                        "Get free tier at: https://www.mongodb.com/cloud/atlas"
+                    )
+
+                # Optional: allow TLS validation bypass for restricted HPC environments
+                # This is useful when compute nodes have certificate trust issues
+                if os.getenv('EXPFLOW_MONGODB_TLS_INSECURE', '').lower() in ('1', 'true', 'yes'):
+                    if 'tlsAllowInvalidCertificates=true' not in connection_string:
+                        sep = '&' if '?' in connection_string else '?'
+                        connection_string = f"{connection_string}{sep}tlsAllowInvalidCertificates=true"
+                    print("[WARN] MongoDB TLS cert validation disabled via EXPFLOW_MONGODB_TLS_INSECURE")
+
+                self._results_storage = ResultsStorage(
+                    backend='mongodb',
+                    connection_string=connection_string,
+                    database=os.getenv('EXPFLOW_MONGODB_DATABASE', 'experiments')
+                )
+                print(f"[INFO] Using MongoDB backend")
+
+            elif backend == 'postgresql':
+                # PostgreSQL backend (remote)
+                if not connection_string:
+                    raise ValueError(
+                        "EXPFLOW_CONNECTION_STRING required for PostgreSQL backend"
+                    )
+
+                self._results_storage = ResultsStorage(
+                    backend='postgresql',
+                    connection_string=connection_string,
+                    table_name=os.getenv('EXPFLOW_POSTGRES_TABLE', 'experiments')
+                )
+                print(f"[INFO] Using PostgreSQL backend")
+
+            else:
+                # SQLite backend (local, default)
+                db_path = self.project_root / "experiments_results.db"
+                self._results_storage = ResultsStorage(
+                    backend='sqlite',
+                    path=str(db_path)
+                )
+                print(f"[INFO] Using SQLite backend: {db_path}")
 
         return self._results_storage
 
@@ -1370,24 +1744,27 @@ class BaseExperimentManager(ABC):
                 print(f"WARNING: Could not harvest results for {exp_id}: {e}")
                 results = {}
 
+        # Load fresh config from YAML (single source of truth)
+        record = self.get_experiment_record(exp_id) or {}
+
         # Build complete experiment data
         exp_data = {
             'exp_id': exp_id,
             'status': exp_meta.get('status', 'unknown'),
-            'created_at': exp_meta.get('config', {}).get('created_at'),
-            'submitted_at': exp_meta.get('config', {}).get('submitted_at'),
-            'completed_at': exp_meta.get('config', {}).get('completed_at'),
-            'config': exp_meta.get('config', {}),
+            'created_at': record.get('created_at'),
+            'submitted_at': exp_meta.get('submitted_at'),
+            'completed_at': exp_meta.get('completed_at'),
+            'config': record,
             'slurm': {
-                'partition': exp_meta.get('config', {}).get('partition'),
-                'num_gpus': exp_meta.get('config', {}).get('num_gpus'),
-                'train_job_id': exp_meta.get('config', {}).get('train_job_id'),
-                'eval_job_id': exp_meta.get('config', {}).get('eval_job_id')
+                'partition': record.get('partition'),
+                'num_gpus': record.get('num_gpus'),
+                'train_job_id': exp_meta.get('train_job_id'),
+                'eval_job_id': exp_meta.get('eval_job_id')
             },
             'git': {
-                'commit': exp_meta.get('config', {}).get('git_commit'),
-                'branch': exp_meta.get('config', {}).get('git_branch'),
-                'dirty': exp_meta.get('config', {}).get('git_dirty')
+                'commit': record.get('git_commit'),
+                'branch': record.get('git_branch'),
+                'dirty': record.get('git_dirty')
             },
             'results': results or {},
             'stored_at': datetime.now().isoformat()
@@ -1408,7 +1785,10 @@ class BaseExperimentManager(ABC):
         self,
         status_filter: str = 'completed',
         force_reharvest: bool = False,
-        verbose: bool = True
+        verbose: bool = True,
+        submit_after_current: bool = False,
+        slurm_account: Optional[str] = None,
+        manager_script_path: Optional[str] = None
     ) -> Dict[str, Dict[str, Any]]:
         """
         Unified results collection - replaces harvest/harvest-all commands
@@ -1419,6 +1799,9 @@ class BaseExperimentManager(ABC):
             status_filter: Only process experiments with this status ('completed', 'all', etc)
             force_reharvest: If True, re-harvest even if already in database
             verbose: If True, print progress
+            submit_after_current: If True, submit as SLURM job after current running jobs
+            slurm_account: SLURM account for job submission (required if submit_after_current=True)
+            manager_script_path: Path to manager script for SLURM submission
 
         Returns:
             Dictionary mapping exp_id to results
@@ -1432,6 +1815,163 @@ class BaseExperimentManager(ABC):
                 status_filter='all',
                 force_reharvest=True
             )
+
+            # Fire-and-forget: submit harvest job after current experiments finish
+            manager.collect_all_results(
+                status_filter='completed',
+                submit_after_current=True,
+                slurm_account='my_account'
+            )
+        """
+        # Handle fire-and-forget SLURM job submission
+        if submit_after_current:
+            return self._submit_collection_job(
+                status_filter=status_filter,
+                force_reharvest=force_reharvest,
+                slurm_account=slurm_account,
+                manager_script_path=manager_script_path,
+                verbose=verbose
+            )
+
+        # Perform actual collection
+        return self._collect_results_internal(status_filter, force_reharvest, verbose)
+
+    def _submit_collection_job(
+        self,
+        status_filter: str,
+        force_reharvest: bool,
+        slurm_account: Optional[str],
+        manager_script_path: Optional[str],
+        verbose: bool
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Submit results collection as SLURM job with auto-dependency on current jobs
+
+        This enables fire-and-forget workflow: submit experiments, then submit
+        a collection job that runs automatically after all experiments finish.
+
+        Args:
+            status_filter: Status filter for collection
+            force_reharvest: Force reharvest flag
+            slurm_account: SLURM account to use
+            manager_script_path: Path to manager script
+            verbose: Verbose output
+
+        Returns:
+            Empty dict (actual collection happens in SLURM job)
+        """
+        # Query current SLURM jobs
+        try:
+            result = subprocess.run(
+                ["squeue", "-u", os.environ.get("USER", ""), "-h", "-o", "%i"],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            job_ids = [j.strip() for j in result.stdout.strip().split() if j.strip()]
+        except subprocess.CalledProcessError as e:
+            print(f"[ERROR] Failed to query SLURM jobs: {e.stderr}")
+            return {}
+
+        if not job_ids:
+            if verbose:
+                print("No active jobs found. Collecting results now instead of submitting job.")
+            # Fall through to normal collection
+            return self._collect_results_internal(status_filter, force_reharvest, verbose)
+
+        # Build dependency string
+        dependency = "afterok:" + ":".join(job_ids)
+
+        # Determine SLURM account
+        if not slurm_account:
+            slurm_account = self.hpc_config.default_account if self.hpc_config else None
+        if not slurm_account:
+            print("[ERROR] SLURM account required for job submission")
+            print("  Set via slurm_account parameter or EXPFLOW_DEFAULT_ACCOUNT env var")
+            return {}
+
+        # Determine manager script path
+        if not manager_script_path:
+            # Try to infer from calling script
+            manager_script_path = sys.argv[0]
+            if not Path(manager_script_path).exists():
+                print("[ERROR] Could not determine manager script path")
+                print("  Specify via manager_script_path parameter")
+                return {}
+
+        # Build collection command
+        conda_activation = ""
+        if self.hpc_config and self.hpc_config.conda_env:
+            conda_root = self.hpc_config.conda_root or os.environ.get('CONDA_PREFIX', '').rsplit('/', 2)[0]
+            if conda_root:
+                conda_activation = (
+                    f"source {conda_root}/etc/profile.d/conda.sh && "
+                    f"conda activate {self.hpc_config.conda_env} && "
+                )
+
+        collection_cmd = (
+            f"{conda_activation}"
+            f"cd {self.project_root} && "
+            f"python {manager_script_path} collect-results --status={status_filter}"
+        )
+        if force_reharvest:
+            collection_cmd += " --force"
+
+        # Export environment variables for remote database access
+        export_vars = [
+            "ALL",
+            "EXPFLOW_BACKEND",
+            "EXPFLOW_CONNECTION_STRING",
+            "EXPFLOW_MONGODB_TLS_INSECURE",
+            "EXPFLOW_MONGODB_DATABASE",
+            "EXPFLOW_POSTGRES_TABLE"
+        ]
+        export_str = ",".join(export_vars)
+
+        # Build sbatch command
+        output_log = self.logs_dir / "output" / "collect_results_%j.out"
+        error_log = self.logs_dir / "error" / "collect_results_%j.err"
+
+        sbatch_cmd = [
+            "sbatch",
+            f"--job-name=expflow_collect_results",
+            f"--account={slurm_account}",
+            f"--dependency={dependency}",
+            f"--export={export_str}",
+            f"--output={output_log}",
+            f"--error={error_log}",
+            "--wrap",
+            collection_cmd
+        ]
+
+        # Submit job
+        try:
+            result = subprocess.run(
+                sbatch_cmd,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            job_id = result.stdout.strip().split()[-1]
+            if verbose:
+                print(f"[OK] Submitted results collection job: {job_id}")
+                print(f"     Dependencies: {len(job_ids)} jobs ({', '.join(job_ids[:5])}{'...' if len(job_ids) > 5 else ''})")
+                print(f"     Status filter: {status_filter}")
+                print(f"     Collection will start after all current jobs finish")
+            return {}
+        except subprocess.CalledProcessError as e:
+            print(f"[ERROR] Failed to submit collection job: {e.stderr}")
+            return {}
+
+    def _collect_results_internal(
+        self,
+        status_filter: str,
+        force_reharvest: bool,
+        verbose: bool
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Internal method for actual results collection logic.
+        Extracted from collect_all_results for reuse.
         """
         results_collected = {}
 
@@ -1488,7 +2028,11 @@ class BaseExperimentManager(ABC):
 
         if verbose:
             print(f"\n[OK] Collected results from {len(results_collected)} experiments")
-            print(f"     Database: {self.project_root / 'experiments_results.db'}")
+            backend_name = os.getenv('EXPFLOW_BACKEND', 'sqlite')
+            if backend_name == 'sqlite':
+                print(f"     Database: {self.project_root / 'experiments_results.db'}")
+            else:
+                print(f"     Database: {backend_name}")
 
         return results_collected
 
@@ -1648,3 +2192,759 @@ class BaseExperimentManager(ABC):
                 dry_run=dry_run,
                 verbose=verbose
             )
+
+    # =========================================================================
+    # Metadata Bulk Operations (v0.9.0+)
+    # =========================================================================
+
+    def backup_metadata(self, label: Optional[str] = None) -> Path:
+        """
+        Create a timestamped backup of experiments.json.
+
+        Args:
+            label: Optional label appended to filename (e.g. "before_rename").
+
+        Returns:
+            Path to the backup file.
+        """
+        import shutil
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        suffix = f"_{label}" if label else ""
+        backup_path = self.metadata_db.parent / f"experiments.json.{timestamp}{suffix}.bak"
+        shutil.copy2(self.metadata_db, backup_path)
+        print(f"Backup created: {backup_path}")
+        return backup_path
+
+    def rename_experiment(
+        self,
+        old_id: str,
+        new_id: str,
+        dry_run: bool = False
+    ) -> bool:
+        """
+        Rename a single experiment with cascading updates across all locations.
+
+        Cascade order:
+        1. experiments.json — rename key, update exp_id field, update path strings
+        2. {old_id}.yaml   — rename file, update exp_id: line inside
+        3. Training/eval directories — rename by replacing old_id in name
+
+        Args:
+            old_id: Existing experiment ID.
+            new_id: Target experiment ID.
+            dry_run: If True, print planned changes without modifying anything.
+
+        Returns:
+            True if successful (or dry_run). False on validation failure.
+        """
+        import re as _re
+
+        if old_id not in self.metadata:
+            print(f"ERROR: Experiment {old_id} not found in metadata")
+            return False
+        if new_id in self.metadata and new_id != old_id:
+            print(f"ERROR: Experiment {new_id} already exists")
+            return False
+
+        changes = []
+
+        # 1. Metadata JSON
+        old_yaml = self.configs_dir / f"{old_id}.yaml"
+        new_yaml = self.configs_dir / f"{new_id}.yaml"
+        changes.append(f"  metadata key: {old_id} -> {new_id}")
+        changes.append(f"  YAML rename: {old_yaml.name} -> {new_yaml.name}")
+
+        # Check directories
+        def _dirs_matching(root: Path, pattern_fn) -> List[Path]:
+            if not root.exists():
+                return []
+            return [d for d in root.iterdir() if d.is_dir() and pattern_fn(d.name)]
+
+        def _is_related(name: str) -> bool:
+            return (name == old_id
+                    or name.startswith(f"{old_id}_")
+                    or name.startswith(f"{old_id}-")
+                    or f"_{old_id}_" in name
+                    or name.endswith(f"_{old_id}"))
+
+        related_dirs = _dirs_matching(self.experiments_dir, _is_related)
+        for d in related_dirs:
+            new_name = d.name.replace(old_id, new_id)
+            changes.append(f"  dir rename: {d.name} -> {new_name}")
+
+        if dry_run:
+            print(f"[DRY RUN] rename_experiment({old_id} -> {new_id}):")
+            for c in changes:
+                print(c)
+            return True
+
+        # Apply metadata update
+        entry = self.metadata.pop(old_id)
+        entry["exp_id"] = new_id
+        # Update string-valued path fields
+        for field_name in ("train_script_path", "eval_script_path"):
+            if entry.get(field_name):
+                entry[field_name] = entry[field_name].replace(old_id, new_id)
+        if isinstance(entry.get("results"), dict):
+            csv_path = entry["results"].get("csv_path")
+            if csv_path:
+                entry["results"]["csv_path"] = csv_path.replace(old_id, new_id)
+        self.metadata[new_id] = entry
+        self._save_metadata()
+
+        # Rename YAML
+        if old_yaml.exists():
+            content = old_yaml.read_text()
+            content = _re.sub(
+                r'^(exp_id:\s+)' + _re.escape(old_id) + r'\s*$',
+                f'\\g<1>{new_id}',
+                content,
+                flags=_re.MULTILINE
+            )
+            new_yaml.write_text(content)
+            old_yaml.unlink()
+
+        # Rename directories
+        for d in related_dirs:
+            new_name = d.name.replace(old_id, new_id)
+            d.rename(d.parent / new_name)
+
+        print(f"[OK] Renamed {old_id} -> {new_id}")
+        return True
+
+    def bulk_rename(
+        self,
+        rename_map: Dict[str, str],
+        dry_run: bool = False,
+        auto_backup: bool = True
+    ) -> Dict[str, bool]:
+        """
+        Rename multiple experiments atomically.
+
+        Args:
+            rename_map: Dict mapping old_id -> new_id.
+            dry_run: Preview changes without applying.
+            auto_backup: Create timestamped backup before applying any changes.
+
+        Returns:
+            Dict mapping old_id -> success bool.
+        """
+        # Pre-validate
+        errors = []
+        for old_id, new_id in rename_map.items():
+            if old_id not in self.metadata:
+                errors.append(f"  {old_id}: not found")
+            if new_id in self.metadata and new_id not in rename_map.values():
+                errors.append(f"  {new_id}: already exists as target")
+        if errors:
+            print("Validation errors:")
+            for e in errors:
+                print(e)
+            return {old_id: False for old_id in rename_map}
+
+        if not dry_run and auto_backup:
+            self.backup_metadata("before_bulk_rename")
+
+        results = {}
+        for old_id, new_id in rename_map.items():
+            results[old_id] = self.rename_experiment(old_id, new_id, dry_run=dry_run)
+
+        ok = sum(v for v in results.values())
+        print(f"bulk_rename: {ok}/{len(rename_map)} succeeded")
+        return results
+
+    def validate_consistency(self) -> "ConsistencyReport":
+        """
+        Check for drift between metadata JSON, YAML configs, and filesystem.
+
+        Returns:
+            ConsistencyReport describing issues found.
+        """
+        missing_yaml = []
+        orphan_yaml = []
+        stale_config_copy = []
+        broken_script_paths = []
+
+        # Check each metadata entry
+        for exp_id, entry in self.metadata.items():
+            config_path = self.configs_dir / f"{exp_id}.yaml"
+            if not config_path.exists():
+                missing_yaml.append(exp_id)
+            if "config" in entry:
+                stale_config_copy.append(exp_id)
+            for field_name in ("train_script_path", "eval_script_path"):
+                path_val = entry.get(field_name)
+                if path_val and not Path(path_val).exists():
+                    broken_script_paths.append(exp_id)
+                    break
+
+        # Check for orphan YAML files
+        registered = set(self.metadata.keys())
+        for yaml_path in self.configs_dir.glob("*.yaml"):
+            exp_id = yaml_path.stem
+            if exp_id not in registered and yaml_path.name != "experiments.yaml":
+                orphan_yaml.append(exp_id)
+
+        ok = not any([missing_yaml, orphan_yaml, stale_config_copy, broken_script_paths])
+        report = ConsistencyReport(
+            missing_yaml=missing_yaml,
+            orphan_yaml=orphan_yaml,
+            stale_config_copy=stale_config_copy,
+            broken_script_paths=broken_script_paths,
+            ok=ok
+        )
+        print(str(report))
+        return report
+
+    def repair_consistency(self, dry_run: bool = False) -> "ConsistencyReport":
+        """
+        Fix detected consistency issues automatically.
+
+        Actions taken:
+        - Migrate stale config copies (sync_metadata)
+        - Register orphan YAMLs with status="unknown"
+        - Clear broken script paths (set to None)
+
+        Does NOT delete any files or experiments.
+
+        Returns:
+            ConsistencyReport after repairs.
+        """
+        report = self.validate_consistency()
+        if report.ok:
+            return report
+
+        if report.stale_config_copy:
+            print(f"Migrating {len(report.stale_config_copy)} stale config copies...")
+            self.sync_metadata(dry_run=dry_run)
+
+        for exp_id in report.orphan_yaml:
+            print(f"Registering orphan: {exp_id}")
+            if not dry_run:
+                self.metadata[exp_id] = {"exp_id": exp_id, "status": "unknown", "results": {}}
+
+        for exp_id in report.broken_script_paths:
+            entry = self.metadata.get(exp_id, {})
+            for field_name in ("train_script_path", "eval_script_path"):
+                if entry.get(field_name) and not Path(entry[field_name]).exists():
+                    print(f"Clearing broken {field_name} for {exp_id}")
+                    if not dry_run:
+                        entry[field_name] = None
+
+        if not dry_run:
+            self._save_metadata()
+
+        return self.validate_consistency()
+
+    # =========================================================================
+    # Run History Tracking (v0.9.0+)
+    # =========================================================================
+
+    @property
+    def run_results_storage(self):
+        """
+        Lazily initialize a separate storage backend for per-run history.
+
+        Uses the same backend configuration as results_storage but stores
+        in a separate table/collection ('experiment_runs') so run history
+        is additive and never overwrites aggregate results.
+        """
+        if not hasattr(self, '_run_results_storage'):
+            from .results_storage import ResultsStorage
+            backend = os.getenv('EXPFLOW_BACKEND', 'sqlite')
+            connection_string = os.getenv('EXPFLOW_CONNECTION_STRING')
+
+            if backend == 'mongodb':
+                self._run_results_storage = ResultsStorage(
+                    backend='mongodb',
+                    connection_string=connection_string,
+                    database=os.getenv('EXPFLOW_MONGODB_DATABASE', 'experiments'),
+                    collection='experiment_runs'
+                )
+            elif backend == 'postgresql':
+                self._run_results_storage = ResultsStorage(
+                    backend='postgresql',
+                    connection_string=connection_string,
+                    table_name='experiment_runs'
+                )
+            else:
+                db_path = self.project_root / "experiment_runs.db"
+                self._run_results_storage = ResultsStorage(
+                    backend='sqlite', path=str(db_path)
+                )
+        return self._run_results_storage
+
+    def _parse_eval_dir_metadata(self, dir_name: str) -> Dict[str, Any]:
+        """
+        Extract structured metadata from an evaluation directory name.
+
+        Supports naming patterns:
+          - {exp_id}_eval_{split}_{city}_{date}_{time}_{job_id}
+          - {exp_id}_eval_{split}_{date}_{time}_{job_id}
+          - {exp_id}_eval_{split}_{city}_{date}_{time}
+          - {exp_id}_eval_{split}_{city}_{date}
+
+        Returns:
+            Dict with keys: exp_id, eval_split, city, timestamp, slurm_job_id
+        """
+        known_cities = {"boston", "vegas", "pittsburgh", "singapore", "all"}
+        parts = dir_name.split("_eval_")
+
+        if len(parts) != 2:
+            return {"exp_id": dir_name, "eval_split": None, "city": None,
+                    "timestamp": None, "slurm_job_id": None}
+
+        exp_id = parts[0]
+        tokens = parts[1].split("_")
+        eval_split = tokens[0] if tokens else None
+        city = None
+        date_start = 1
+
+        if len(tokens) > 1 and tokens[1] in known_cities:
+            city = tokens[1]
+            date_start = 2
+
+        timestamp = None
+        slurm_job_id = None
+        date_tokens = tokens[date_start:]
+        if len(date_tokens) >= 2:
+            timestamp = f"{date_tokens[0]}_{date_tokens[1]}"
+            if len(date_tokens) >= 3:
+                slurm_job_id = date_tokens[2]
+
+        return {"exp_id": exp_id, "eval_split": eval_split, "city": city,
+                "timestamp": timestamp, "slurm_job_id": slurm_job_id}
+
+    def store_run_results(self, exp_id: str, force: bool = False) -> int:
+        """
+        Store per-run evaluation results for an experiment in run_results_storage.
+
+        Discovers every evaluation directory for exp_id, groups runs by timestamp
+        so multi-city evaluations become one record, and stores each run separately.
+        Unlike collect_all_results(), this is additive and never overwrites.
+
+        Args:
+            exp_id: Experiment ID.
+            force: If True, overwrite existing run records.
+
+        Returns:
+            Number of new run records stored.
+        """
+        if exp_id not in self.metadata:
+            return 0
+
+        # Find all evaluation directories matching exp_id
+        eval_root = self.experiments_dir.parent / "evaluations"
+        if not eval_root.exists():
+            eval_root = self.experiments_dir / "evaluations"
+        if not eval_root.exists():
+            return 0
+
+        eval_dirs = []
+        for d in eval_root.glob(f"*{exp_id}*"):
+            if not d.is_dir():
+                continue
+            parsed = self._parse_eval_dir_metadata(d.name)
+            if parsed["exp_id"] == exp_id:
+                eval_dirs.append(d)
+
+        if not eval_dirs:
+            return 0
+
+        # Group by timestamp
+        runs_by_timestamp: Dict[str, Dict] = {}
+        for d in eval_dirs:
+            meta = self._parse_eval_dir_metadata(d.name)
+            ts = meta.get("timestamp") or d.name
+            if ts not in runs_by_timestamp:
+                runs_by_timestamp[ts] = {"dirs": [], "meta": meta, "cities": {}}
+            city = meta.get("city") or "all"
+            runs_by_timestamp[ts]["dirs"].append(d)
+            runs_by_timestamp[ts]["cities"][city] = d
+
+        stored = 0
+        record = self.get_experiment_record(exp_id) or {}
+
+        with self.run_results_storage as storage:
+            for ts, run_group in sorted(runs_by_timestamp.items()):
+                first_meta = run_group["meta"]
+                job_id = first_meta.get("slurm_job_id", "")
+                run_id = f"{exp_id}__{ts}"
+                if job_id:
+                    run_id += f"__{job_id}"
+
+                if not force and storage.get(run_id):
+                    continue
+
+                # Parse CSVs for each city
+                city_results = {}
+                for city, eval_dir in run_group["cities"].items():
+                    csv_files = sorted(
+                        eval_dir.glob("*.csv"),
+                        key=lambda p: p.stat().st_mtime, reverse=True
+                    )
+                    if not csv_files:
+                        continue
+                    try:
+                        import csv as _csv
+                        rows = []
+                        with open(csv_files[0], newline='') as fh:
+                            reader = _csv.DictReader(fh)
+                            rows = [r for r in reader if r.get("token") != "average_all_frames"]
+                        if not rows:
+                            continue
+                        # Map common column names to short keys
+                        col_map = {
+                            "NC": ["no_at_fault_collisions", "no_collision", "NC"],
+                            "DAC": ["drivable_area_compliance", "DAC"],
+                            "EP": ["ego_progress", "EP"],
+                            "TTC": ["time_to_collision_within_bound", "time_to_collision", "TTC"],
+                            "C": ["history_comfort", "comfort", "C"],
+                            "PDMS": ["score", "pdm_score", "PDMS"],
+                        }
+                        metrics = {}
+                        for short, candidates in col_map.items():
+                            for col in candidates:
+                                vals = [float(r[col]) for r in rows if col in r and r[col]]
+                                if vals:
+                                    metrics[short] = sum(vals) / len(vals)
+                                    break
+                        city_results[city] = {
+                            "pdms": metrics.get("PDMS", 0.0),
+                            "scenarios": len(rows),
+                            **{k: v for k, v in metrics.items() if k != "PDMS"},
+                            "csv_file": csv_files[0].name,
+                            "eval_dir": eval_dir.name,
+                        }
+                    except Exception as e:
+                        city_results[city] = {"pdms": 0.0, "error": str(e), "eval_dir": eval_dir.name}
+
+                if not city_results:
+                    continue
+
+                per_city = {k: v for k, v in city_results.items() if k != "all"}
+                source = per_city if per_city else city_results
+                valid = [v["pdms"] for v in source.values() if v.get("pdms", 0) > 0]
+                avg_pdms = sum(valid) / len(valid) if valid else 0.0
+
+                state = self.metadata[exp_id]
+                run_record = {
+                    "run_id": run_id,
+                    "exp_id": exp_id,
+                    "eval_timestamp": ts,
+                    "harvested_at": datetime.now().isoformat(),
+                    "git_commit": record.get("git_commit"),
+                    "git_branch": record.get("git_branch"),
+                    "git_dirty": record.get("git_dirty"),
+                    "slurm_train_job_id": state.get("train_job_id"),
+                    "slurm_eval_job_id": job_id or None,
+                    "eval_job_ids": state.get("eval_job_ids", []),
+                    "config": {k: record.get(k) for k in (
+                        "agent", "backbone", "epochs", "batch_size",
+                        "learning_rate", "partition", "num_gpus"
+                    )},
+                    "cities": city_results,
+                    "avg_pdms": avg_pdms,
+                    "total_scenarios": sum(v.get("scenarios", 0) for v in city_results.values()),
+                    "status": state.get("status", "unknown"),
+                    "description": record.get("description", ""),
+                }
+                if storage.store(run_id, run_record):
+                    stored += 1
+
+        return stored
+
+    def collect_all_run_results(
+        self,
+        exp_ids: Optional[List[str]] = None,
+        force: bool = False,
+        verbose: bool = True
+    ) -> Dict[str, int]:
+        """
+        Collect per-run results for all (or specified) experiments.
+
+        Args:
+            exp_ids: Experiments to process. Defaults to all in metadata.
+            force: Re-harvest existing run records.
+            verbose: Print progress.
+
+        Returns:
+            Dict mapping exp_id to number of new runs stored.
+        """
+        if exp_ids is None:
+            exp_ids = list(self.metadata.keys())
+        if verbose:
+            print(f"Collecting run history for {len(exp_ids)} experiments...")
+        totals: Dict[str, int] = {}
+        total_new = 0
+        for exp_id in sorted(exp_ids):
+            count = self.store_run_results(exp_id, force=force)
+            totals[exp_id] = count
+            total_new += count
+            if verbose and count > 0:
+                print(f"  [OK] {exp_id}: {count} new runs stored")
+        if verbose:
+            print(f"\n[OK] Stored {total_new} new runs across {len(totals)} experiments")
+        return totals
+
+    def show_run_history(self, exp_id: str, output_json: bool = False) -> List[Dict]:
+        """
+        Show all stored evaluation runs for an experiment.
+
+        Args:
+            exp_id: Experiment ID.
+            output_json: If True, print JSON instead of a table.
+
+        Returns:
+            List of run records.
+        """
+        with self.run_results_storage as storage:
+            all_runs = storage.query()
+
+        runs = [r for r in all_runs if r.get("exp_id") == exp_id]
+        runs.sort(key=lambda r: r.get("eval_timestamp", ""))
+
+        if output_json:
+            import json as _json
+            print(_json.dumps(runs, indent=2))
+            return runs
+
+        if not runs:
+            print(f"No run history found for {exp_id}")
+            return []
+
+        print(f"\n{'='*90}")
+        print(f"  Run History for {exp_id}  ({len(runs)} runs)")
+        print(f"{'='*90}")
+        print(f"  {'Run ID':<40} {'Checkpoint':<20} {'Git':<10} {'PDMS':>8} {'Date'}")
+        print(f"  {'-'*40} {'-'*20} {'-'*10} {'-'*8} {'-'*16}")
+
+        for run in runs:
+            run_id = run.get("run_id", "?")
+            display_id = run_id.replace(f"{exp_id}__", "")
+            if len(display_id) > 38:
+                display_id = display_id[:35] + "..."
+            ckpt = run.get("checkpoint_path", "")
+            ckpt_name = (Path(ckpt).name[:18] + "..." if len(Path(ckpt).name) > 20 else Path(ckpt).name) if ckpt else "-"
+            git = (run.get("git_commit") or "-")[:8]
+            pdms = run.get("avg_pdms", 0.0)
+            pdms_str = f"{pdms:.4f}" if pdms else "-"
+            ts = run.get("eval_timestamp", "")
+            if ts and len(ts) >= 15:
+                date_str = f"{ts[:4]}-{ts[4:6]}-{ts[6:8]} {ts[9:11]}:{ts[11:13]}"
+            else:
+                date_str = ts or "-"
+            print(f"  {display_id:<40} {ckpt_name:<20} {git:<10} {pdms_str:>8} {date_str}")
+
+        if runs:
+            latest = runs[-1]
+            cities = latest.get("cities", {})
+            if cities:
+                print(f"\n  Latest run per-city PDMS:")
+                for city, data in sorted(cities.items()):
+                    city_pdms = data.get("pdms", 0.0)
+                    scenarios = data.get("scenarios", 0)
+                    print(f"    {city:<15} {city_pdms:.4f}  ({scenarios} scenarios)")
+
+        print(f"{'='*90}")
+        return runs
+
+    # =========================================================================
+    # Batch Job Orchestrator (v0.9.0+)
+    # =========================================================================
+
+    def _parse_time_limit(self, time_str: str) -> float:
+        """Parse SLURM time limit string to fractional hours. Returns 0.0 on failure."""
+        if not time_str:
+            return 0.0
+        try:
+            # Handle D-HH:MM:SS
+            if "-" in time_str:
+                days_str, rest = time_str.split("-", 1)
+                days = int(days_str)
+                parts = rest.split(":")
+            else:
+                days = 0
+                parts = time_str.split(":")
+
+            if len(parts) == 3:
+                h, m, s = int(parts[0]), int(parts[1]), int(parts[2])
+            elif len(parts) == 2:
+                h, m, s = 0, int(parts[0]), int(parts[1])
+            else:
+                return float(parts[0]) / 60.0  # minutes
+            return days * 24 + h + m / 60.0 + s / 3600.0
+        except (ValueError, IndexError):
+            return 0.0
+
+    def preview_batch(self, exp_ids: List[str]) -> "BatchPreview":
+        """
+        Preview resource requirements for a list of experiments.
+
+        Loads each experiment's YAML config and sums GPU hours, groups by partition.
+
+        Args:
+            exp_ids: Experiment IDs to preview.
+
+        Returns:
+            BatchPreview dataclass with resource summary.
+        """
+        ready = []
+        not_ready = []
+        warnings_list = []
+        total_gpus = 0
+        estimated_gpu_hours = 0.0
+        partition_summary: Dict[str, int] = {}
+
+        for exp_id in exp_ids:
+            if exp_id not in self.metadata:
+                not_ready.append(exp_id)
+                warnings_list.append(f"{exp_id}: not registered in metadata")
+                continue
+            try:
+                config = self._load_config(exp_id)
+                ready.append(exp_id)
+                gpus = int(config.get("num_gpus", 1))
+                nodes = int(config.get("num_nodes", 1))
+                time_h = self._parse_time_limit(config.get("time_limit", "0"))
+                gpu_hours = gpus * nodes * time_h
+                total_gpus += gpus * nodes
+                estimated_gpu_hours += gpu_hours
+                partition = config.get("partition", "unknown")
+                partition_summary[partition] = partition_summary.get(partition, 0) + 1
+            except FileNotFoundError:
+                not_ready.append(exp_id)
+                warnings_list.append(f"{exp_id}: YAML config missing")
+
+        preview = BatchPreview(
+            total_experiments=len(exp_ids),
+            total_gpus=total_gpus,
+            estimated_gpu_hours=round(estimated_gpu_hours, 2),
+            partition_summary=partition_summary,
+            ready=ready,
+            not_ready=not_ready,
+            warnings=warnings_list
+        )
+
+        print(f"Batch preview: {len(ready)}/{len(exp_ids)} ready")
+        print(f"  Total GPUs requested: {total_gpus}")
+        print(f"  Estimated GPU-hours:  {preview.estimated_gpu_hours}")
+        if partition_summary:
+            for p, count in partition_summary.items():
+                print(f"  Partition {p}: {count} experiments")
+        if not_ready:
+            print(f"  WARNING: {len(not_ready)} experiments not ready: {not_ready}")
+
+        return preview
+
+    def submit_batch(
+        self,
+        exp_ids: List[str],
+        dry_run: bool = False,
+        train_only: bool = False,
+        eval_only: bool = False
+    ) -> Dict[str, Optional[str]]:
+        """
+        Submit multiple experiments sequentially.
+
+        Individual failures are logged but do not stop the batch.
+
+        Args:
+            exp_ids: Ordered list of experiment IDs.
+            dry_run: Pass through to submit_experiment().
+            train_only: Submit only training jobs.
+            eval_only: Submit only evaluation jobs.
+
+        Returns:
+            Dict mapping exp_id -> primary job ID (or None on failure / dry_run).
+        """
+        results: Dict[str, Optional[str]] = {}
+        failed = []
+
+        for exp_id in exp_ids:
+            print(f"=== Submitting {exp_id} ===")
+            try:
+                job_ids = self.submit_experiment(
+                    exp_id,
+                    train_only=train_only,
+                    eval_only=eval_only,
+                    dry_run=dry_run
+                )
+                primary = job_ids.get("train_job_id") or job_ids.get("eval_job_id")
+                results[exp_id] = primary
+            except SystemExit:
+                print(f"  FAILED: {exp_id}")
+                results[exp_id] = None
+                failed.append(exp_id)
+            print()
+
+        ok = len(exp_ids) - len(failed)
+        print(f"submit_batch: {ok}/{len(exp_ids)} submitted, {len(failed)} failed")
+        if failed:
+            print(f"  Failed: {failed}")
+        return results
+
+    def generate_batch_script(
+        self,
+        exp_ids: List[str],
+        slurm_account: str,
+        partition: str,
+        job_name: str = "expflow_batch",
+        time_limit: str = "04:00:00",
+        submit_flags: Optional[Dict[str, str]] = None
+    ) -> str:
+        """
+        Generate a SLURM wrapper script that submits a batch of experiments.
+
+        Mirrors the pattern in scripts/trigger-train.slurm. Returns script as
+        string; caller writes to disk and submits with sbatch.
+
+        Args:
+            exp_ids: Experiments to include.
+            slurm_account: SBATCH --account value for the wrapper job.
+            partition: SBATCH --partition for the wrapper job.
+            job_name: SBATCH --job-name.
+            time_limit: SBATCH --time for the wrapper (not individual jobs).
+            submit_flags: Extra flags per submit call e.g. {"--sweep-cities": ""}.
+
+        Returns:
+            SLURM script as string.
+        """
+        manager_script = sys.argv[0] if sys.argv else "manager.py"
+        output_log = self.logs_dir / "output" / f"{job_name}_%j.out"
+        error_log = self.logs_dir / "error" / f"{job_name}_%j.err"
+
+        conda_block = self._generate_conda_activation({})
+        flags_str = ""
+        if submit_flags:
+            flags_str = " " + " ".join(
+                f"{k} {v}" if v else k for k, v in submit_flags.items()
+            )
+
+        exp_list = " ".join(exp_ids)
+        lines = [
+            "#!/bin/bash",
+            f"#SBATCH --job-name={job_name}",
+            f"#SBATCH --account={slurm_account}",
+            f"#SBATCH --partition={partition}",
+            "#SBATCH --nodes=1",
+            "#SBATCH --ntasks=1",
+            "#SBATCH --cpus-per-task=2",
+            "#SBATCH --mem=4G",
+            f"#SBATCH --time={time_limit}",
+            f"#SBATCH --output={output_log}",
+            f"#SBATCH --error={error_log}",
+            "",
+            conda_block,
+            "",
+            f"cd {self.project_root}",
+            "",
+            f"for exp in {exp_list}; do",
+            f'    echo "=== Submitting $exp ==="',
+            f'    python {manager_script} submit "$exp"{flags_str} 2>&1',
+            '    echo ""',
+            "done",
+            "",
+            f"echo 'Batch complete: {len(exp_ids)} experiments submitted'",
+        ]
+        return "\n".join(lines)

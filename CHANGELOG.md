@@ -5,6 +5,102 @@ All notable changes to ExpFlow will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-03-09
+
+### Added - Feature Absorption from Scripts and NAVSIM Manager
+
+**New Modules:**
+
+- **`src/expflow/checkpoint_validator.py`** — Standalone checkpoint resolution and artifact validation
+  - `CheckpointResolver`: Stateless utility to resolve glob patterns to a single checkpoint path
+    - `resolve(pattern, strategy)` — strategies: `mtime` (default), `name_epoch`, `name_step`
+    - `resolve_all(pattern)` — all matches sorted by mtime descending
+    - `exists(pattern)` — True if at least one match exists
+  - `ValidationReport` — dataclass with `found`, `total`, `missing`, `ready_to_run`, `warnings`
+  - `CheckpointValidator` — validate artifacts for config YAMLs and manager-registered experiments
+    - `validate_config(config_path, required_fields)` — parse viz config YAML schema
+    - `validate_experiments(exp_ids, required_artifacts)` — check checkpoint/yaml/results/scripts
+    - `validate_directory(config_dir, priority_first)` — validate all YAMLs in a directory
+
+- **`src/expflow/experiment_series.py`** — Cartesian-product experiment batch generation
+  - `CheckpointSpec` — checkpoint descriptor with path, key, arch_desc, path_field, key_field
+  - `ExperimentConfig` — single resolved experiment config ready for registration
+  - `ExperimentSeries` — generate batches from base config and parameter grid
+    - `expand()` — Cartesian product of `parameter_grid`, returns `List[ExperimentConfig]`
+    - `add_checkpoint_registry(registry, registry_param)` — inject checkpoint paths per backbone
+    - `validate_prerequisites()` — check all checkpoint paths exist (supports globs)
+    - `register_all(manager, skip_existing, dry_run)` — bulk-create in a manager
+    - `to_yaml_files(output_dir, overwrite)` — write configs as YAML files without a manager
+    - `summary()` — human-readable summary of the series
+
+- **`src/expflow/analysis_pipeline.py`** — Declarative YAML-driven post-hoc analysis runner
+  - `PipelineExperiment`, `PipelineResult`, `PipelineSummary` — dataclasses for pipeline state
+  - `AnalysisPipeline` — run user-provided handler over a set of experiments
+    - `from_config(config_path)` — load from YAML (pipeline_name, experiments, output_dir, …)
+    - `validate()` — resolve all checkpoints and exp_configs, cache results, print readiness
+    - `run(handler, output_dir, skip_invalid, verbose)` — call handler per experiment
+    - `export_summary(output_path, format)` — export run summary as JSON or CSV
+  - Handler signature: `handler(name, exp_config, checkpoint_path, output_dir, pipeline_context)`
+
+**New Methods on `BaseExperimentManager`:**
+
+- **Config Sync (Bug Fix)**
+  - `_load_config(exp_id)` — load fresh config from YAML; raises `FileNotFoundError` if missing
+  - `get_experiment_record(exp_id)` — merge YAML config + JSON state at read time; JSON keys win
+  - `sync_metadata(dry_run)` — idempotent migration to remove stale embedded `"config"` copies
+
+- **Consistency Validation**
+  - `validate_consistency()` — returns `ConsistencyReport` (missing_yaml, orphan_yaml, stale_config_copy, broken_script_paths)
+  - `repair_consistency(dry_run)` — fix detected issues without deleting data
+
+- **Metadata Bulk Operations**
+  - `backup_metadata(label)` — timestamped backup of `experiments.json`
+  - `rename_experiment(old_id, new_id, dry_run)` — cascade rename across JSON, YAML, and directories
+  - `bulk_rename(rename_map, dry_run, auto_backup)` — validate-first then apply sequentially
+
+- **Run History Tracking**
+  - `run_results_storage` property — separate storage backend for per-run records (`experiment_runs` table)
+  - `store_run_results(exp_id, force)` — discover eval dirs, group by timestamp, store run records
+  - `collect_all_run_results(exp_ids, force, verbose)` — batch run history collection
+  - `show_run_history(exp_id, output_json)` — display run history table
+
+- **Batch Job Orchestrator**
+  - `preview_batch(exp_ids)` — returns `BatchPreview` with GPU/hour estimates per partition
+  - `submit_batch(exp_ids, dry_run, train_only, eval_only)` — sequential batch submission with failure logging
+  - `generate_batch_script(exp_ids, slurm_account, partition, ...)` — generate SLURM wrapper script string
+
+**New Dataclasses in `hpcexp_core`:**
+
+- `ConsistencyReport` — result of `validate_consistency()`
+- `BatchPreview` — resource preview from `preview_batch()`
+
+### Fixed
+
+- **YAML/JSON Config Drift** — experiments.json was storing a full copy of the config dict (`"config"` key) that never got updated when the YAML changed. All display and export methods (`list_experiments`, `show_experiment`, `status`, `export_results`, `store_experiment_results`) were reading stale data.
+  - `create_experiment()` no longer embeds `"config"` in JSON metadata
+  - `resume_experiment()` no longer embeds `"config"` in JSON metadata
+  - `submit_experiment()` no longer reads stale `meta["config"]`; loads from YAML directly
+  - All read paths use `get_experiment_record()` which merges YAML + JSON at read time
+  - Deprecation warning printed once on load when old-format database is detected
+  - `sync_metadata()` migrates old-format databases idempotently
+
+### Changed
+
+- `src/expflow/__init__.py` — version bumped to `0.9.0`; exports added for all new classes
+- `navsim_manager.py` — `store_run_results()` and `store_comprehensive_results()` updated to load config from YAML first, falling back to embedded copy for unmigrated entries
+
+### Migration
+
+Run once after upgrading to remove stale config copies from existing databases:
+```python
+manager = MyManager(project_root)
+manager.sync_metadata()
+```
+
+After migration, `experiments.json` entries will no longer contain a `"config"` key. All config data is read live from `experiment_configs/{exp_id}.yaml`.
+
+---
+
 ## [0.8.0] - 2026-02-06
 
 ### Added - Database Integration and Unified Results System

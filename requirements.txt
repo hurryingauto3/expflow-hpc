@@ -6,13 +6,13 @@ pandas>=1.3.0
 google-generativeai>=0.3.0
 
 # Optional: Remote database backends (ExpFlow v0.8.0+)
-# Uncomment to enable MongoDB support:
+# MongoDB support (native in BaseExperimentManager)
 pymongo>=4.0.0
 
-# Uncomment to enable PostgreSQL support:
+# PostgreSQL support (native in BaseExperimentManager)
 # psycopg2-binary>=2.9.0
 
-# To install with MongoDB: pip install -r requirements.txt pymongo
+# To install with MongoDB: pip install -r requirements.txt
 # To install with PostgreSQL: pip install -r requirements.txt psycopg2-binary
-# To install both: pip install -r requirements.txt pymongo psycopg2-binary
+# To install both: pip install -r requirements.txt psycopg2-binary
 

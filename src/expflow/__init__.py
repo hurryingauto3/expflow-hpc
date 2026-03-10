@@ -5,9 +5,15 @@ Lightweight experiment tracking for SLURM-based HPC clusters.
 Auto-detects environment, generates SLURM scripts, tracks experiments.
 """
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
-from .hpcexp_core import BaseExperimentManager, BaseExperimentConfig, ExperimentMetadata
+from .hpcexp_core import (
+    BaseExperimentManager,
+    BaseExperimentConfig,
+    ExperimentMetadata,
+    ConsistencyReport,
+    BatchPreview,
+)
 from .hpc_config import (
     HPCConfig,
     HPCEnvironment,
@@ -24,6 +30,14 @@ from .results_harvester import (
     EvaluationMetrics,
 )
 from .pruner import ExperimentPruner, PruneStats
+from .experiment_series import ExperimentSeries, ExperimentConfig, CheckpointSpec
+from .checkpoint_validator import CheckpointValidator, CheckpointResolver, ValidationReport
+from .analysis_pipeline import (
+    AnalysisPipeline,
+    PipelineExperiment,
+    PipelineResult,
+    PipelineSummary,
+)
 from .results_storage import (
     ResultsStorage,
     ResultsQueryAPI,
@@ -56,6 +70,18 @@ __all__ = [
     "EvaluationMetrics",
     "ExperimentPruner",
     "PruneStats",
+    "ConsistencyReport",
+    "BatchPreview",
+    "ExperimentSeries",
+    "ExperimentConfig",
+    "CheckpointSpec",
+    "CheckpointValidator",
+    "CheckpointResolver",
+    "ValidationReport",
+    "AnalysisPipeline",
+    "PipelineExperiment",
+    "PipelineResult",
+    "PipelineSummary",
     "ResultsStorage",
     "ResultsQueryAPI",
     "SQLiteBackend",
