@@ -57,6 +57,14 @@ from .eval_log_parser import EvalLogParser
 from .eval_advisor import EvalResourceAdvisor, DefaultEvalResourceAdvisor
 from .matrix_builder import MatrixExperimentBuilder
 
+# Phase-2: execution backends (laptop / CI / SLURM)
+from .execution import (
+    ExecutionBackend,
+    LocalBackend,
+    SlurmBackend,
+    auto_detect_backend,
+)
+
 __all__ = [
     "BaseExperimentManager",
     "BaseExperimentConfig",
@@ -111,4 +119,8 @@ __all__ = [
     "EvalResourceAdvisor",
     "DefaultEvalResourceAdvisor",
     "MatrixExperimentBuilder",
+    "ExecutionBackend",
+    "LocalBackend",
+    "SlurmBackend",
+    "auto_detect_backend",
 ]
