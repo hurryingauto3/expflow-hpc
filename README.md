@@ -8,6 +8,24 @@
 
 **ExpFlow** auto-detects your HPC environment (username, scratch paths, SLURM accounts) and automates experiment tracking - no hardcoded paths, no manual script editing, no Excel spreadsheets.
 
+## What's New in v0.10.1
+
+- **Reusable abstractions extracted from `navsim_manager.py`** so any project
+  can build managers with the same level of polish without copy-pasting
+  hundreds of lines:
+  - `ResultRecordBuilder` + `BaseRecordEnricher` — structured records
+  - `BaseScopeAggregator` — per-scope (city / shard / sub-task) eval aggregation
+  - `AttemptGrouping` + `attempt_summaries_storage` — repeated-attempt bookkeeping
+  - `BaseExperimentManager.register_experiments` + `expflow register` CLI
+  - `submit_experiment(config_overrides=...)` + `reevaluate_batch`
+  - `git_worktree_block`, `quote_bash`, `assert_safe_identifier`
+  - `EvalLogParser`, `EvalResourceAdvisor`, `MatrixExperimentBuilder`
+  - `CheckpointResolver.resolve_for_eval` (registry / Hydra / glob fallback)
+- The unreleased v0.10.0 orchestration scaffolding (`orchestrate`,
+  `decision`, `budget`, `events` subcommands) was rolled back — the
+  supporting modules were never landed in the repo and the package
+  failed to import.
+
 ## Quick Start
 
 ```bash
@@ -34,17 +52,22 @@ expflow logs exp001
 - **Auto-Detection**: Automatically detects username, scratch directory, SLURM accounts, partition access, containers, and conda
 - **Interactive Setup**: Menu-based initialization with intelligent account and GPU recommendations
 - **Experiment Monitoring**: Built-in commands for status tracking, log viewing, and job management
-- **Checkpoint Resumption**: Automatic checkpoint detection and experiment resume support (v0.6.0+)
-- **Checkpoint Registry**: Structured checkpoint tracking with metadata and best checkpoint selection (v0.7.0+)
-- **Container Integration**: Generic apptainer/singularity support with auto-detected images and bind mounts (v0.7.0+)
-- **Conda Management**: Auto-detected conda environments with module support (v0.7.0+)
-- **GPU Monitoring**: Built-in nvidia-smi monitoring with configurable intervals (v0.7.0+)
-- **NCCL Optimization**: GPU-specific NCCL presets for H200, A100, L40s, RTX8000 (v0.7.0+)
+- **Checkpoint Resumption**: Automatic checkpoint detection and experiment resume support
+- **Checkpoint Registry**: Structured checkpoint tracking with metadata and best checkpoint selection
+- **Container Integration**: Generic apptainer/singularity support with auto-detected images and bind mounts
+- **Conda Management**: Auto-detected conda environments with module support
+- **GPU Monitoring**: Built-in nvidia-smi monitoring with configurable intervals
+- **NCCL Optimization**: GPU-specific NCCL presets for H200, A100, L40s, RTX8000
 - **Experiment Pruning**: Clean up duplicate runs and invalid experiments with safe archival
 - **Resource Advisor**: Real-time GPU availability and smart recommendations
 - **Partition Validation**: Automatic partition-account compatibility testing
 - **YAML-Based Configs**: No more editing SLURM scripts manually
 - **Complete Tracking**: Git commits, job IDs, timestamps, and results automatically logged
+- **Reusable abstractions** (v0.10.1): `BaseScopeAggregator`,
+  `AttemptGrouping`, `ResultRecordBuilder`, `MatrixExperimentBuilder`, and
+  helpers (`git_worktree_block`, `quote_bash`, `EvalLogParser`,
+  `EvalResourceAdvisor`, `CheckpointResolver.resolve_for_eval`) extracted
+  from `navsim_manager.py` so any manager can ship the same features.
 - **Extensible**: Subclass `BaseExperimentManager` for custom workflows
 
 ## Installation
@@ -190,6 +213,34 @@ expflow cancel <exp_id>                        # Cancel running jobs
 expflow prune --dry-run                        # Preview cleanup of duplicate experiments
 ```
 
+### Bulk Registration (v0.10.1+)
+```bash
+expflow register                               # Register every YAML in experiment_configs/
+expflow register exp_a exp_b                   # Register specific exp IDs
+expflow register --force                       # Re-register even if already present
+```
+
+### Local Testing
+```bash
+python3 -m venv .venv-codex
+. ./.venv-codex/bin/activate
+pip install -e '.[dev]'
+pytest -q tests
+```
+
+### Workflow UX (NAVSIM Manager Example)
+```bash
+# Clone an entire series with field overrides
+python navsim_manager.py clone-series A12 A13 --set latent=true --description-suffix "camera-only latent"
+
+# Submit all created runs for that prefix
+python navsim_manager.py submit-series A13 --status created
+
+# Start-of-session snapshot and one-command results sync
+python navsim_manager.py session-start --prefix A13
+python navsim_manager.py sync-results --status completed
+```
+
 ### Templates
 ```bash
 expflow template <name>      # Create experiment template
@@ -325,24 +376,9 @@ python my_manager.py export results.csv
 ## Documentation
 
 - **[USER_GUIDE.md](USER_GUIDE.md)** - Complete user guide with examples
+- **[QUICK_REFERENCE.md](QUICK_REFERENCE.md)** - Day-to-day command cheat sheet
 - **[CHANGELOG.md](CHANGELOG.md)** - Version history and updates
-
-## What's New in v0.7.0
-
-**Framework-Level Helpers** (Eliminates 150-200 lines of boilerplate):
-- **Container Integration**: Auto-detected apptainer images with configurable bind mounts
-- **Conda Management**: Auto-detected conda environments with module support
-- **SquashFS Overlays**: Generic overlay mounting helpers with automatic fallback
-- **Checkpoint Registry**: Structured checkpoint tracking with metadata and best selection
-- **GPU Monitoring**: Configurable nvidia-smi monitoring with automatic cleanup
-- **NCCL Optimization**: GPU-specific presets (H200, A100, L40s, RTX8000)
-- **Variable Substitution**: Template system for portable configs (${scratch_dir}, ${username}, etc.)
-
-**Migration**: Existing managers work unchanged. See [MIGRATION_v0.7.md](MIGRATION_v0.7.md) for upgrading.
-
-**Previous Releases:**
-- **v0.6.0**: Checkpoint resumption with `manager.resume_experiment()`
-- **v0.5.0**: Experiment pruning with `expflow prune`
+- **[DOCUMENTATION.md](DOCUMENTATION.md)** - Documentation map and maintenance policy
 
 See [CHANGELOG.md](CHANGELOG.md) for complete version history.
 

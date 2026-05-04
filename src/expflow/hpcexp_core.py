@@ -15,7 +15,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 import yaml
 
 from .hpc_config import HPCConfig, load_project_config
@@ -316,6 +316,143 @@ class BaseExperimentManager(ABC):
         print(f"sync_metadata: migrated={len(migrated)}, skipped={len(skipped)}, "
               f"yaml_written={len(warnings)}")
         return {"migrated": migrated, "skipped": skipped, "warnings": warnings}
+
+    # =========================================================================
+    # Bulk YAML registration (extracted from navsim_manager.register_experiments)
+    # =========================================================================
+
+    def register_experiments(
+        self,
+        exp_ids: Optional[List[str]] = None,
+        force: bool = False,
+    ) -> Dict[str, str]:
+        """
+        Register YAML configs in ``configs_dir`` into the metadata DB.
+
+        Useful when configs are added out-of-band (cherry-picked, manually
+        copied) since ``_load_metadata`` only reads the JSON DB and does
+        not rescan the configs directory. Without registration, downstream
+        operations (``submit_experiment``, ``reevaluate_batch``) treat the
+        experiment as unknown.
+
+        Args:
+            exp_ids: Explicit IDs to register. If None, scan for any
+                     YAML in ``configs_dir`` not yet registered.
+            force:   Re-register even if already present (resets status
+                     to ``"created"``).
+
+        Returns:
+            Dict mapping exp_id -> action: ``"registered"`` |
+            ``"already_present"`` | ``"yaml_missing"``.
+        """
+        if exp_ids is None:
+            candidates = sorted(p.stem for p in self.configs_dir.glob("*.yaml"))
+        else:
+            candidates = list(exp_ids)
+
+        results: Dict[str, str] = {}
+        registered_count = 0
+        for exp_id in candidates:
+            config_path = self.configs_dir / f"{exp_id}.yaml"
+            if not config_path.exists():
+                results[exp_id] = "yaml_missing"
+                continue
+            if exp_id in self.metadata and not force:
+                results[exp_id] = "already_present"
+                continue
+            with open(config_path) as f:
+                yaml.safe_load(f)  # validate parseable
+            self.metadata[exp_id] = {
+                "exp_id": exp_id,
+                "status": "created",
+                "train_script_path": None,
+                "eval_script_path": None,
+                "run_id": None,
+                "results": {},
+            }
+            results[exp_id] = "registered"
+            registered_count += 1
+
+        if registered_count > 0:
+            self._save_metadata()
+        print(f"register_experiments: registered={registered_count}/{len(candidates)}")
+        return results
+
+    # =========================================================================
+    # Re-evaluation with config overrides (extracted from navsim reeval_v1_1)
+    # =========================================================================
+
+    def reevaluate_batch(
+        self,
+        exp_ids: Optional[List[str]] = None,
+        overrides: Optional[Dict[str, Any]] = None,
+        *,
+        dry_run: bool = True,
+        eval_only: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Re-submit a batch of experiments with per-call config overrides.
+
+        Walks ``exp_ids`` (or every registered experiment with a checkpoint
+        under ``checkpoints_dir`` when ``exp_ids`` is None), and submits
+        each one with ``overrides`` merged into its YAML config. The
+        overrides are not written back to disk; they only apply to the
+        in-flight submission.
+
+        Args:
+            exp_ids:   Explicit IDs to re-evaluate. None → scan registry.
+            overrides: Dict merged into each loaded config before script
+                       generation. Use this to flip e.g. an evaluator
+                       version, eval split, or output suffix.
+            dry_run:   If True, print plans without submitting (default).
+            eval_only: Skip training (default — re-eval is the typical
+                       use case).
+
+        Returns:
+            Dict mapping exp_id -> per-experiment result info or status
+            string.
+        """
+        overrides = overrides or {}
+        if exp_ids is None:
+            if not self.checkpoints_dir.exists():
+                print(f"No checkpoints directory at {self.checkpoints_dir}")
+                return {}
+            exp_ids = sorted(p.stem for p in self.checkpoints_dir.glob("*.txt"))
+
+        plan: List[str] = []
+        skipped: List[Tuple[str, str]] = []  # noqa: F821 — declared above
+        for exp_id in exp_ids:
+            if exp_id not in self.metadata:
+                skipped.append((exp_id, "not in metadata"))
+                continue
+            plan.append(exp_id)
+
+        print(f"reevaluate_batch plan: {len(plan)} experiments, overrides={overrides}")
+        for exp_id in plan:
+            print(f"  {exp_id}")
+        if skipped:
+            print("Skipped:")
+            for exp_id, reason in skipped:
+                print(f"  {exp_id}: {reason}")
+
+        if dry_run:
+            print("(dry-run; pass dry_run=False to actually submit)")
+            return {exp_id: {"status": "planned"} for exp_id in plan}
+
+        results: Dict[str, Any] = {}
+        for exp_id in plan:
+            try:
+                results[exp_id] = self.submit_experiment(
+                    exp_id,
+                    eval_only=eval_only,
+                    dry_run=False,
+                    config_overrides=overrides,
+                )
+            except SystemExit:
+                results[exp_id] = {"status": "failed_to_submit"}
+            except Exception as e:
+                results[exp_id] = {"status": "error", "error": str(e)}
+        return results
 
     @abstractmethod
     def _generate_train_script(self, config: Any) -> str:
@@ -952,9 +1089,22 @@ class BaseExperimentManager(ABC):
         exp_id: str,
         train_only: bool = False,
         eval_only: bool = False,
-        dry_run: bool = False
+        dry_run: bool = False,
+        config_overrides: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, str]:
-        """Submit experiment to SLURM"""
+        """
+        Submit experiment to SLURM.
+
+        Args:
+            exp_id: Experiment to submit.
+            train_only / eval_only: limit which scripts get generated.
+            dry_run: write scripts but don't sbatch.
+            config_overrides: Optional dict merged into the loaded YAML
+                config before script generation. The override applies
+                only to this submission — it is NOT written back to the
+                YAML on disk. Useful for one-off re-evaluations under a
+                different evaluator version, eval split, etc.
+        """
 
         if exp_id not in self.metadata:
             print(f"Error: Experiment {exp_id} not found.")
@@ -965,6 +1115,9 @@ class BaseExperimentManager(ABC):
 
         # Load fresh config from YAML (single source of truth)
         full_config = self._load_config(exp_id)
+        if config_overrides:
+            # Shallow merge — overrides win over YAML, never persisted.
+            full_config = {**full_config, **config_overrides}
 
         # Generate scripts
         train_script_path = self.generated_dir / f"train_{exp_id}.slurm"
@@ -1037,8 +1190,30 @@ class BaseExperimentManager(ABC):
             print(e.stderr)
             sys.exit(1)
 
-    def list_experiments(self, status: Optional[str] = None, tags: Optional[List[str]] = None):
-        """List all experiments with optional filtering"""
+    def list_experiments(
+        self,
+        status: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        live_overlay: bool = True,
+    ):
+        """
+        List all experiments with optional filtering.
+
+        Args:
+            status: filter by exact status string (e.g. ``"submitted"``).
+            tags: filter to experiments matching at least one of these tags.
+            live_overlay: when True (default), merge in live SLURM job
+                states from ``squeue`` so a stored ``submitted`` row shows
+                as ``running`` / ``pending`` if its train_job_id is in
+                queue. Set False to skip the squeue call.
+        """
+
+        live_jobs: Dict[str, Dict[str, str]] = {}
+        if live_overlay:
+            try:
+                live_jobs = self._get_slurm_jobs()
+            except Exception:
+                live_jobs = {}
 
         filtered = []
         for exp_id, meta in self.metadata.items():
@@ -1061,6 +1236,20 @@ class BaseExperimentManager(ABC):
             raw_desc = record.get("description", "")
             desc = raw_desc[:47] + "..." if len(raw_desc) > 50 else raw_desc
             status_str = meta.get("status", "unknown")
+            # Live SLURM overlay: if any registered job for this experiment
+            # is in the live queue, surface its state instead of stale
+            # metadata (running > pending > submitted by precedence).
+            if live_jobs:
+                ids = []
+                for k in ("train_job_id", "eval_job_id"):
+                    if meta.get(k):
+                        ids.append(str(meta[k]))
+                ids.extend(str(j) for j in (meta.get("eval_job_ids") or []))
+                live_states = [live_jobs[j]["state"].lower() for j in ids if j in live_jobs]
+                for preferred in ("running", "pending", "configuring", "completing"):
+                    if preferred in live_states:
+                        status_str = preferred
+                        break
             print(f"{exp_id:<15} {status_str:<12} {desc:<50}")
 
     def show_experiment(self, exp_id: str):
@@ -2474,34 +2663,77 @@ class BaseExperimentManager(ABC):
                 )
         return self._run_results_storage
 
+    @property
+    def attempt_summaries_storage(self):
+        """
+        Lazily-initialised storage for per-attempt-group summaries.
+
+        Mirrors the backend selection of ``results_storage`` /
+        ``run_results_storage`` but writes to a separate
+        ``attempt_summaries`` table/collection so summaries can be
+        re-materialised idempotently from raw run records (see
+        ``expflow.run_history.AttemptGrouping``).
+        """
+        if not hasattr(self, '_attempt_summaries_storage'):
+            from .results_storage import ResultsStorage
+            backend = os.getenv('EXPFLOW_BACKEND', 'sqlite')
+            connection_string = os.getenv('EXPFLOW_CONNECTION_STRING')
+
+            if backend == 'mongodb':
+                self._attempt_summaries_storage = ResultsStorage(
+                    backend='mongodb',
+                    connection_string=connection_string,
+                    database=os.getenv('EXPFLOW_MONGODB_DATABASE', 'experiments'),
+                    collection='attempt_summaries',
+                )
+            elif backend == 'postgresql':
+                self._attempt_summaries_storage = ResultsStorage(
+                    backend='postgresql',
+                    connection_string=connection_string,
+                    table_name='attempt_summaries',
+                )
+            else:
+                db_path = self.project_root / "attempt_summaries.db"
+                self._attempt_summaries_storage = ResultsStorage(
+                    backend='sqlite', path=str(db_path)
+                )
+        return self._attempt_summaries_storage
+
+    # Override on a subclass (or set ``self.scope_labels``) to teach the
+    # parser which scope labels (cities, sub-tasks, dataset shards, ...)
+    # may appear in eval-dir names. Defaults to an empty set so generic
+    # eval dirs without scopes still parse cleanly.
+    scope_labels: set = set()
+
     def _parse_eval_dir_metadata(self, dir_name: str) -> Dict[str, Any]:
         """
         Extract structured metadata from an evaluation directory name.
 
         Supports naming patterns:
-          - {exp_id}_eval_{split}_{city}_{date}_{time}_{job_id}
+          - {exp_id}_eval_{split}_{scope}_{date}_{time}_{job_id}
           - {exp_id}_eval_{split}_{date}_{time}_{job_id}
-          - {exp_id}_eval_{split}_{city}_{date}_{time}
-          - {exp_id}_eval_{split}_{city}_{date}
+          - {exp_id}_eval_{split}_{scope}_{date}_{time}
+          - {exp_id}_eval_{split}_{scope}_{date}
 
         Returns:
-            Dict with keys: exp_id, eval_split, city, timestamp, slurm_job_id
+            Dict with keys: exp_id, eval_split, city (kept for backwards
+            compat — equals scope), scope, timestamp, slurm_job_id
         """
-        known_cities = {"boston", "vegas", "pittsburgh", "singapore", "all"}
+        known_scopes = set(self.scope_labels) if self.scope_labels else set()
         parts = dir_name.split("_eval_")
 
         if len(parts) != 2:
             return {"exp_id": dir_name, "eval_split": None, "city": None,
-                    "timestamp": None, "slurm_job_id": None}
+                    "scope": None, "timestamp": None, "slurm_job_id": None}
 
         exp_id = parts[0]
         tokens = parts[1].split("_")
         eval_split = tokens[0] if tokens else None
-        city = None
+        scope = None
         date_start = 1
 
-        if len(tokens) > 1 and tokens[1] in known_cities:
-            city = tokens[1]
+        if len(tokens) > 1 and tokens[1] in known_scopes:
+            scope = tokens[1]
             date_start = 2
 
         timestamp = None
@@ -2512,8 +2744,10 @@ class BaseExperimentManager(ABC):
             if len(date_tokens) >= 3:
                 slurm_job_id = date_tokens[2]
 
-        return {"exp_id": exp_id, "eval_split": eval_split, "city": city,
-                "timestamp": timestamp, "slurm_job_id": slurm_job_id}
+        # ``city`` retained as alias of ``scope`` for backwards-compat
+        # with callers expecting the older key name.
+        return {"exp_id": exp_id, "eval_split": eval_split, "city": scope,
+                "scope": scope, "timestamp": timestamp, "slurm_job_id": slurm_job_id}
 
     def store_run_results(self, exp_id: str, force: bool = False) -> int:
         """
