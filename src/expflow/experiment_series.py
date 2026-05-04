@@ -8,10 +8,9 @@ Extracted from the pattern in scripts/generate_custom_vit_experiments.py.
 """
 
 import itertools
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
 import yaml
 
@@ -19,7 +18,6 @@ if TYPE_CHECKING:
     from .hpcexp_core import BaseExperimentManager
 
 from .checkpoint_validator import CheckpointResolver
-
 
 # =============================================================================
 # Data classes

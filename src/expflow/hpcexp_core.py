@@ -6,20 +6,19 @@ This is the base framework that can be customized for any deep learning project.
 Users subclass BaseExperimentManager and implement project-specific methods.
 """
 
-import argparse
 import json
 import os
 import subprocess
 import sys
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
 import yaml
 
-from .hpc_config import HPCConfig, load_project_config
-
+from .hpc_config import HPCConfig
 
 # =============================================================================
 # Base Configuration Classes
@@ -578,7 +577,7 @@ class BaseExperimentManager(ABC):
         elif module_loads and conda_env:
             # Assume module provides conda
             script_lines.extend([
-                f"source $(conda info --base)/etc/profile.d/conda.sh",
+                "source $(conda info --base)/etc/profile.d/conda.sh",
                 f"conda activate {conda_env}"
             ])
 
@@ -618,17 +617,17 @@ class BaseExperimentManager(ABC):
         # Create temporary script
         exp_id = config.get('exp_id', 'unknown')
         script_lines = [
-            f"# Create temporary script for container execution",
+            "# Create temporary script for container execution",
             f"TEMP_SCRIPT=$(mktemp /tmp/{exp_id}_XXXXXX.sh)",
-            f"cat > \"${{TEMP_SCRIPT}}\" << 'CONTAINER_SCRIPT_EOF'",
-            f"#!/bin/bash",
+            "cat > \"${TEMP_SCRIPT}\" << 'CONTAINER_SCRIPT_EOF'",
+            "#!/bin/bash",
             script_content,
-            f"CONTAINER_SCRIPT_EOF",
-            f"chmod +x \"${{TEMP_SCRIPT}}\"",
-            f"",
-            f"# Execute in container",
-            f"apptainer exec \\",
-            f"    --nv \\",
+            "CONTAINER_SCRIPT_EOF",
+            "chmod +x \"${TEMP_SCRIPT}\"",
+            "",
+            "# Execute in container",
+            "apptainer exec \\",
+            "    --nv \\",
         ]
 
         if bind_args:
@@ -642,10 +641,10 @@ class BaseExperimentManager(ABC):
 
         script_lines.extend([
             f"    \"{container}\" \\",
-            f"    bash \"${{TEMP_SCRIPT}}\"",
-            f"",
-            f"# Cleanup",
-            f"rm -f \"${{TEMP_SCRIPT}}\""
+            "    bash \"${TEMP_SCRIPT}\"",
+            "",
+            "# Cleanup",
+            "rm -f \"${TEMP_SCRIPT}\""
         ])
 
         return "\n".join(script_lines)
@@ -751,21 +750,21 @@ class BaseExperimentManager(ABC):
         log_file = self.logs_dir / "output" / f"{exp_id}_gpu_${{SLURM_JOB_ID}}.csv"
 
         script_lines = [
-            f"# Start GPU monitoring",
-            f"nvidia-smi \\",
-            f"    --query-gpu=timestamp,name,utilization.gpu,utilization.memory,memory.used,memory.total \\",
-            f"    --format=csv \\",
+            "# Start GPU monitoring",
+            "nvidia-smi \\",
+            "    --query-gpu=timestamp,name,utilization.gpu,utilization.memory,memory.used,memory.total \\",
+            "    --format=csv \\",
             f"    -l {interval} \\",
             f"    > {log_file} &",
-            f"GPU_MONITOR_PID=$!",
-            f"",
-            f"# Cleanup function",
-            f"cleanup_gpu_monitor() {{",
-            f"    if [ ! -z \"${{GPU_MONITOR_PID}}\" ]; then",
-            f"        kill ${{GPU_MONITOR_PID}} 2>/dev/null || true",
-            f"    fi",
-            f"}}",
-            f"trap cleanup_gpu_monitor EXIT"
+            "GPU_MONITOR_PID=$!",
+            "",
+            "# Cleanup function",
+            "cleanup_gpu_monitor() {",
+            "    if [ ! -z \"${GPU_MONITOR_PID}\" ]; then",
+            "        kill ${GPU_MONITOR_PID} 2>/dev/null || true",
+            "    fi",
+            "}",
+            "trap cleanup_gpu_monitor EXIT"
         ]
 
         return "\n".join(script_lines)
@@ -1205,7 +1204,7 @@ class BaseExperimentManager(ABC):
             return job_ids
 
         except subprocess.CalledProcessError as e:
-            print(f"Error submitting jobs:")
+            print("Error submitting jobs:")
             print(e.stderr)
             sys.exit(1)
 
@@ -1294,17 +1293,17 @@ class BaseExperimentManager(ABC):
             "resume_epoch", "resume_count", "train_job_id", "eval_job_id",
             "eval_job_ids", "cancelled_at"
         }
-        print(f"\nConfiguration:")
+        print("\nConfiguration:")
         for key, value in record.items():
             if key not in state_keys:
                 print(f"  {key}: {value}")
 
         if meta.get("results"):
-            print(f"\nResults:")
+            print("\nResults:")
             for key, value in meta["results"].items():
                 print(f"  {key}: {value}")
 
-        print(f"\nTimeline:")
+        print("\nTimeline:")
         print(f"  Created: {record.get('created_at', 'N/A')}")
         if meta.get("submitted_at"):
             print(f"  Submitted: {meta['submitted_at']}")
@@ -1312,7 +1311,7 @@ class BaseExperimentManager(ABC):
             print(f"  Completed: {meta['completed_at']}")
 
         if record.get("git_commit"):
-            print(f"\nGit:")
+            print("\nGit:")
             print(f"  Commit: {record['git_commit'][:8]}")
             print(f"  Branch: {record.get('git_branch', 'N/A')}")
 
@@ -1523,7 +1522,7 @@ class BaseExperimentManager(ABC):
         # Check if new experiment ID already exists
         if new_exp_id in self.metadata:
             print(f"Error: Experiment {new_exp_id} already exists")
-            print(f"  Specify a different new_exp_id or delete the existing experiment")
+            print("  Specify a different new_exp_id or delete the existing experiment")
             sys.exit(1)
 
         # Create new config based on source config
@@ -1611,7 +1610,7 @@ class BaseExperimentManager(ABC):
             print("\nNo active jobs")
 
         # Show recent experiments
-        print(f"\nRecent Experiments:")
+        print("\nRecent Experiments:")
         print(f"{'ID':<15} {'Status':<12} {'Train Job':<12} {'Eval Job':<12} {'Description'}")
         print("-" * 80)
 
@@ -1853,8 +1852,9 @@ class BaseExperimentManager(ABC):
             manager.results_storage
         """
         if not hasattr(self, '_results_storage'):
-            from .results_storage import ResultsStorage
             import os
+
+            from .results_storage import ResultsStorage
 
             # Get backend configuration from environment
             backend = os.getenv('EXPFLOW_BACKEND', 'sqlite')
@@ -1888,7 +1888,7 @@ class BaseExperimentManager(ABC):
                     connection_string=connection_string,
                     database=os.getenv('EXPFLOW_MONGODB_DATABASE', 'experiments')
                 )
-                print(f"[INFO] Using MongoDB backend")
+                print("[INFO] Using MongoDB backend")
 
             elif backend == 'postgresql':
                 # PostgreSQL backend (remote)
@@ -1902,7 +1902,7 @@ class BaseExperimentManager(ABC):
                     connection_string=connection_string,
                     table_name=os.getenv('EXPFLOW_POSTGRES_TABLE', 'experiments')
                 )
-                print(f"[INFO] Using PostgreSQL backend")
+                print("[INFO] Using PostgreSQL backend")
 
             else:
                 # SQLite backend (local, default)
@@ -2149,7 +2149,7 @@ class BaseExperimentManager(ABC):
 
         sbatch_cmd = [
             "sbatch",
-            f"--job-name=expflow_collect_results",
+            "--job-name=expflow_collect_results",
             f"--account={slurm_account}",
             f"--dependency={dependency}",
             f"--export={export_str}",
@@ -2173,7 +2173,7 @@ class BaseExperimentManager(ABC):
                 print(f"[OK] Submitted results collection job: {job_id}")
                 print(f"     Dependencies: {len(job_ids)} jobs ({', '.join(job_ids[:5])}{'...' if len(job_ids) > 5 else ''})")
                 print(f"     Status filter: {status_filter}")
-                print(f"     Collection will start after all current jobs finish")
+                print("     Collection will start after all current jobs finish")
             return {}
         except subprocess.CalledProcessError as e:
             print(f"[ERROR] Failed to submit collection job: {e.stderr}")
@@ -2235,7 +2235,7 @@ class BaseExperimentManager(ABC):
                     )
 
                     if not success and verbose:
-                        print(f"    WARNING: Failed to store in database")
+                        print("    WARNING: Failed to store in database")
 
                 except Exception as e:
                     if verbose:
@@ -2282,7 +2282,7 @@ class BaseExperimentManager(ABC):
                 filters={'status': 'completed'}
             )
         """
-        from .results_storage import export_to_json, export_to_csv
+        from .results_storage import export_to_csv, export_to_json
 
         # Auto-generate output path if not provided
         if output_path is None:
@@ -3001,7 +3001,7 @@ class BaseExperimentManager(ABC):
             latest = runs[-1]
             cities = latest.get("cities", {})
             if cities:
-                print(f"\n  Latest run per-city PDMS:")
+                print("\n  Latest run per-city PDMS:")
                 for city, data in sorted(cities.items()):
                     city_pdms = data.get("pdms", 0.0)
                     scenarios = data.get("scenarios", 0)
@@ -3201,7 +3201,7 @@ class BaseExperimentManager(ABC):
             f"cd {self.project_root}",
             "",
             f"for exp in {exp_list}; do",
-            f'    echo "=== Submitting $exp ==="',
+            '    echo "=== Submitting $exp ==="',
             f'    python {manager_script} submit "$exp"{flags_str} 2>&1',
             '    echo ""',
             "done",

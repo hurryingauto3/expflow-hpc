@@ -21,12 +21,11 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import yaml
 
 from .hpc_config import HPCConfig
-
 
 # =============================================================================
 # Cache Configuration
@@ -663,7 +662,7 @@ echo ""
             filtered.append((name, meta))
 
         if not filtered:
-            print(f"No caches found" + (f" of type '{cache_type}'" if cache_type else ""))
+            print("No caches found" + (f" of type '{cache_type}'" if cache_type else ""))
             return
 
         print(f"\n{'Name':<40} {'Type':<15} {'Status':<12} {'Build Job'}")

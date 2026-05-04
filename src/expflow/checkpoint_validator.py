@@ -6,11 +6,10 @@ validating that all required artifacts exist before running analysis jobs.
 """
 
 import glob as _glob
-import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union, TYPE_CHECKING
+from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
 import yaml
 

@@ -42,7 +42,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Protocol, runtime_checkable
 
-
 # Job-state vocabulary (lowercase, normalised across backends)
 STATE_QUEUED = "queued"
 STATE_RUNNING = "running"

@@ -7,9 +7,10 @@ Auto-detects user environment and provides HPC-agnostic configuration
 import os
 import pwd
 import subprocess
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
+
 import yaml
 
 
@@ -368,7 +369,7 @@ def initialize_project(project_name: str, config_path: Optional[str] = None) -> 
     print("Auto-detecting HPC environment...")
     config = HPCEnvironment.create_default_config(project_name)
 
-    print(f"\n Detected HPC Environment:")
+    print("\n Detected HPC Environment:")
     print(f"  Cluster: {config.cluster_name}")
     print(f"  Username: {config.username}")
     print(f"  Scratch: {config.scratch_dir}")
@@ -377,7 +378,7 @@ def initialize_project(project_name: str, config_path: Optional[str] = None) -> 
     print(f"  Available Partitions: {', '.join(config.available_partitions[:5])}")
 
     # Create project directories
-    print(f"\nCreating project directories...")
+    print("\nCreating project directories...")
     for directory in [
         config.experiments_dir,
         f"{config.logs_dir}/output",

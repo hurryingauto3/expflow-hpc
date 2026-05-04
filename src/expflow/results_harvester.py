@@ -13,10 +13,8 @@ Features:
 - CSV export for analysis
 """
 
-import json
-import os
-import re
 import glob
+import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -523,7 +521,7 @@ class BaseResultsHarvester(ABC):
                     training_metrics.plot_path = str(plot_path)
                     print(f"  ✓ Plot: {plot_path}")
         else:
-            print(f"  ✗ No training metrics found")
+            print("  ✗ No training metrics found")
 
         # Harvest evaluation metrics
         eval_metrics = self.harvest_evaluation_metrics(exp_id)
@@ -532,7 +530,7 @@ class BaseResultsHarvester(ABC):
                 score_str = f"{em.score:.4f}" if em.score else "N/A"
                 print(f"  ✓ Evaluation ({em.eval_split}): score={score_str}")
         else:
-            print(f"  ✗ No evaluation metrics found")
+            print("  ✗ No evaluation metrics found")
 
         return training_metrics, eval_metrics
 

@@ -16,7 +16,6 @@ import re
 import shlex
 from typing import Any, Dict, Optional
 
-
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
 
 

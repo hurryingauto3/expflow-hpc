@@ -8,24 +8,20 @@ behaviour without invoking the SLURM CLI.
 
 from __future__ import annotations
 
-import os
 import time
 from pathlib import Path
 
-import pytest
-
 from expflow.execution import (
+    STATE_CANCELLED,
+    STATE_COMPLETED,
+    STATE_FAILED,
+    STATE_QUEUED,
+    STATE_RUNNING,
+    STATE_UNKNOWN,
     LocalBackend,
     SlurmBackend,
     auto_detect_backend,
-    STATE_COMPLETED,
-    STATE_FAILED,
-    STATE_CANCELLED,
-    STATE_RUNNING,
-    STATE_QUEUED,
-    STATE_UNKNOWN,
 )
-
 
 # ---------------------------------------------------------------------------
 # LocalBackend
@@ -189,8 +185,8 @@ def test_auto_detect_backend_returns_slurm_when_sbatch_on_path(tmp_path, monkeyp
 
 def _make_manager(project_root: Path):
     """Build a tiny manager subclass for integration tests."""
-    from expflow.hpcexp_core import BaseExperimentManager
     from expflow.hpc_config import HPCConfig
+    from expflow.hpcexp_core import BaseExperimentManager
 
     class M(BaseExperimentManager):
         def _generate_train_script(self, c):

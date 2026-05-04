@@ -8,12 +8,11 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
 
-from .hpc_config import initialize_project, load_project_config, HPCEnvironment
-from datetime import datetime
-
+from .hpc_config import HPCEnvironment, initialize_project, load_project_config
 
 # =============================================================================
 # Experiment Management Helpers
@@ -108,7 +107,7 @@ def cmd_init(args):
     print("=" * 70)
     print(f" Location: {config.project_root}")
     print(f" Next: cd {config.project_root}")
-    print(f" Docs: https://github.com/hurryingauto3/expflow-hpc/docs")
+    print(" Docs: https://github.com/hurryingauto3/expflow-hpc/docs")
     print()
 
 
@@ -116,7 +115,7 @@ def _finalize_project_setup(config):
     """Create project directories and save config"""
     from pathlib import Path
 
-    print(f"\nCreating project directories...")
+    print("\nCreating project directories...")
     for directory in [
         config.experiments_dir,
         f"{config.logs_dir}/output",
@@ -187,7 +186,7 @@ def cmd_resources(args):
         else:
             # Load project config for recommendations
             try:
-                config = load_project_config(args.project_root)
+                load_project_config(args.project_root)
                 exp_config = None
             except Exception:
                 exp_config = None
@@ -296,7 +295,7 @@ tags:
         f.write(template_content)
 
     print(f" Created template: {template_path}")
-    print(f"  Edit this file to customize your experiment parameters")
+    print("  Edit this file to customize your experiment parameters")
 
 
 # =============================================================================
@@ -351,7 +350,7 @@ def cmd_status(args):
 
     # Show recent experiments
     if metadata:
-        print(f"\nRecent Experiments:")
+        print("\nRecent Experiments:")
         print(f"{'ID':<15} {'Status':<12} {'Train Job':<12} {'Eval Job':<12} {'Description'}")
         print("-" * 80)
 
@@ -427,7 +426,7 @@ def cmd_logs(args):
 
     if args.exp_id not in metadata:
         print(f"Error: Experiment '{args.exp_id}' not found")
-        print(f"Use 'expflow list' to see available experiments")
+        print("Use 'expflow list' to see available experiments")
         sys.exit(1)
 
     log_file = _find_log_file(logs_dir, args.exp_id, args.type, args.errors)
@@ -571,13 +570,13 @@ def cmd_prune(args):
 
     # Perform pruning based on mode
     if args.mode == "duplicates":
-        stats = pruner.prune_duplicates(
+        pruner.prune_duplicates(
             keep_n=args.keep,
             dry_run=args.dry_run,
             verbose=True
         )
     elif args.mode == "invalid":
-        stats = pruner.prune_invalid(
+        pruner.prune_invalid(
             require_checkpoint=not args.no_checkpoint_check,
             require_eval=not args.no_eval_check,
             required_epochs=args.required_epochs,
@@ -585,7 +584,7 @@ def cmd_prune(args):
             verbose=True
         )
     else:  # all
-        stats = pruner.prune_all(
+        pruner.prune_all(
             keep_n=args.keep,
             require_checkpoint=not args.no_checkpoint_check,
             require_eval=not args.no_eval_check,
@@ -598,7 +597,7 @@ def cmd_prune(args):
 def cmd_results_collect(args):
     """Collect all experiment results into database"""
     try:
-        config = load_project_config()
+        load_project_config()
     except FileNotFoundError:
         print("Error: Not in a project directory. Run 'expflow init' first.")
         sys.exit(1)
@@ -620,7 +619,7 @@ def cmd_results_query(args):
         print("Error: Not in a project directory. Run 'expflow init' first.")
         sys.exit(1)
 
-    from .results_storage import ResultsStorage, ResultsQueryAPI
+    from .results_storage import ResultsQueryAPI, ResultsStorage
 
     project_root = Path(config.project_root)
     db_path = project_root / "experiments_results.db"
@@ -695,7 +694,7 @@ def cmd_results_export(args):
         print("Error: Not in a project directory. Run 'expflow init' first.")
         sys.exit(1)
 
-    from .results_storage import ResultsStorage, export_to_json, export_to_csv
+    from .results_storage import ResultsStorage, export_to_csv, export_to_json
 
     project_root = Path(config.project_root)
     db_path = project_root / "experiments_results.db"
@@ -733,7 +732,7 @@ def cmd_results_stats(args):
         print("Error: Not in a project directory. Run 'expflow init' first.")
         sys.exit(1)
 
-    from .results_storage import ResultsStorage, ResultsQueryAPI
+    from .results_storage import ResultsQueryAPI, ResultsStorage
 
     project_root = Path(config.project_root)
     db_path = project_root / "experiments_results.db"
@@ -776,7 +775,6 @@ def cmd_register(args):
     from .hpcexp_core import BaseExperimentManager  # noqa: F401 — type hint only
     project_root = _resolve_project_root(args.project_root)
     configs_dir = project_root / "experiment_configs"
-    db_path = configs_dir / "experiments.json"
 
     metadata = _load_experiments_db(project_root)
 
@@ -857,7 +855,7 @@ For full docs: https://github.com/hurryingauto3/expflow-hpc
     )
 
     # Info command
-    info_parser = subparsers.add_parser("info", help="Show HPC environment info")
+    subparsers.add_parser("info", help="Show HPC environment info")
 
     # Config command
     config_parser = subparsers.add_parser("config", help="Show project configuration")
@@ -999,7 +997,7 @@ Examples:
     )
 
     # results collect
-    results_collect_parser = results_subparsers.add_parser(
+    results_subparsers.add_parser(
         "collect",
         help="Collect all experiment results into database"
     )

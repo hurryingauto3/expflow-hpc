@@ -8,13 +8,12 @@ This module provides functionality to prune experiment directories:
 - Safe deletion (moves to .archive instead of permanent deletion)
 """
 
-import json
 import shutil
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 @dataclass
@@ -379,9 +378,9 @@ class ExperimentPruner:
         if verbose:
             print(f"\nValidating {stats.total_found} experiments...")
             if require_checkpoint:
-                print(f"  Checking for valid checkpoints" + (f" (>= {required_epochs} epochs)" if required_epochs else ""))
+                print("  Checking for valid checkpoints" + (f" (>= {required_epochs} epochs)" if required_epochs else ""))
             if require_eval:
-                print(f"  Checking for evaluation results")
+                print("  Checking for evaluation results")
 
         for exp_dir in exp_dirs:
             valid = True

@@ -18,8 +18,7 @@ import sqlite3
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
-from contextlib import contextmanager
+from typing import Any, Dict, List, Optional
 
 
 class BaseDatabaseBackend(ABC):
@@ -365,10 +364,10 @@ class MongoDBBackend(BaseDatabaseBackend):
         try:
             from pymongo import MongoClient
             from pymongo.errors import ConnectionFailure
-        except ImportError:
+        except ImportError as e:
             raise ImportError(
                 "MongoDB backend requires pymongo. Install with: pip install pymongo"
-            )
+            ) from e
 
         self.connection_string = connection_string or "mongodb://localhost:27017/"
         self.database_name = database
@@ -569,10 +568,10 @@ class PostgreSQLBackend(BaseDatabaseBackend):
             import psycopg2
             import psycopg2.extras
             from psycopg2 import sql as _pg_sql
-        except ImportError:
+        except ImportError as e:
             raise ImportError(
                 "PostgreSQL backend requires psycopg2. Install with: pip install psycopg2-binary"
-            )
+            ) from e
 
         if not connection_string:
             raise ValueError("PostgreSQL backend requires connection_string parameter")
