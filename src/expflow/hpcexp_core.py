@@ -132,12 +132,18 @@ class BaseExperimentManager(ABC):
     4. Implement harvest_results() for your output format
     """
 
-    def __init__(self, hpc_config: HPCConfig):
+    def __init__(self, hpc_config: HPCConfig, *, backend=None):
         """
-        Initialize experiment manager
+        Initialize experiment manager.
 
         Args:
             hpc_config: HPC configuration object
+            backend:    Optional ``ExecutionBackend`` instance. If
+                        ``None`` (default), auto-detects: ``SlurmBackend``
+                        when ``sbatch`` is on ``PATH``, else
+                        ``LocalBackend`` rooted at ``project_root``. Pass
+                        a backend explicitly to force a specific path
+                        (laptop testing, CI, etc.).
         """
         self.hpc_config = hpc_config
 
@@ -170,6 +176,12 @@ class BaseExperimentManager(ABC):
             self.results_dir / "analysis"
         ]:
             directory.mkdir(parents=True, exist_ok=True)
+
+        # Execution backend (Phase 2): laptop, CI, or SLURM cluster.
+        if backend is None:
+            from .execution import auto_detect_backend
+            backend = auto_detect_backend(self.project_root)
+        self.backend = backend
 
         # Load metadata
         self._load_metadata()
@@ -1138,42 +1150,30 @@ class BaseExperimentManager(ABC):
             print(f" Generated evaluation script: {eval_script_path}")
 
         if dry_run:
+            backend_name = getattr(self.backend, "backend_name", "slurm")
+            verb = "sbatch" if backend_name == "slurm" else "bash"
+            dep_hint = "--dependency=afterok:TRAIN_JOB_ID" if backend_name == "slurm" else "(after train)"
             print("\n[DRY RUN] Would submit the following jobs:")
             if not eval_only:
-                print(f"  Training: sbatch {train_script_path}")
+                print(f"  Training: {verb} {train_script_path}")
             if not train_only:
-                print(f"  Evaluation: sbatch --dependency=afterok:TRAIN_JOB_ID {eval_script_path}")
+                print(f"  Evaluation: {verb} {dep_hint} {eval_script_path}")
             return {}
 
-        # Submit to SLURM
+        # Submit through the configured execution backend.
         job_ids = {}
 
         try:
             if not eval_only:
-                result = subprocess.run(
-                    ["sbatch", str(train_script_path)],
-                    capture_output=True,
-                    text=True,
-                    check=True
-                )
-                # Parse job ID from "Submitted batch job 12345"
-                train_job_id = result.stdout.strip().split()[-1]
+                train_job_id = self.backend.submit(train_script_path)
                 job_ids["train_job_id"] = train_job_id
                 print(f" Submitted training job: {train_job_id}")
 
             if not train_only:
-                cmd = ["sbatch"]
-                if "train_job_id" in job_ids:
-                    cmd.extend(["--dependency", f"afterok:{job_ids['train_job_id']}"])
-                cmd.append(str(eval_script_path))
-
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    check=True
+                deps = (
+                    [job_ids["train_job_id"]] if "train_job_id" in job_ids else None
                 )
-                eval_job_id = result.stdout.strip().split()[-1]
+                eval_job_id = self.backend.submit(eval_script_path, depends_on=deps)
                 job_ids["eval_job_id"] = eval_job_id
                 print(f" Submitted evaluation job: {eval_job_id}")
 
@@ -1328,30 +1328,17 @@ class BaseExperimentManager(ABC):
         print(f" Exported {len(records)} experiments to {output_file}")
 
     def _get_slurm_jobs(self) -> Dict[str, Dict[str, str]]:
-        """Get current SLURM jobs for this user"""
+        """
+        Return live job listing from the configured execution backend.
+
+        Method name kept as ``_get_slurm_jobs`` for backwards-compat with
+        existing callers; under the hood it now delegates to
+        ``self.backend.list_jobs()`` which returns a normalised state
+        vocabulary (queued/running/completed/failed/cancelled/unknown)
+        regardless of backend.
+        """
         try:
-            result = subprocess.run(
-                ["squeue", "-u", os.environ.get("USER", ""), "-h",
-                 "-o", "%.18i %.9P %.50j %.8T %.10M %.6D %R"],
-                capture_output=True, text=True
-            )
-            jobs = {}
-            for line in result.stdout.strip().split("\n"):
-                if not line.strip():
-                    continue
-                parts = line.split()
-                if len(parts) >= 4:
-                    job_id = parts[0].strip()
-                    jobs[job_id] = {
-                        "job_id": job_id,
-                        "partition": parts[1].strip(),
-                        "name": parts[2].strip(),
-                        "state": parts[3].strip(),
-                        "time": parts[4].strip() if len(parts) > 4 else "",
-                        "nodes": parts[5].strip() if len(parts) > 5 else "",
-                        "nodelist": parts[6].strip() if len(parts) > 6 else ""
-                    }
-            return jobs
+            return self.backend.list_jobs()
         except Exception:
             return {}
 
@@ -1784,15 +1771,21 @@ class BaseExperimentManager(ABC):
                 print(f"  {jid}")
             return job_ids_list
 
-        # Cancel jobs
-        try:
-            subprocess.run(["scancel", *job_ids_list], check=True)
-            print(f"[OK] Canceled {len(job_ids_list)} jobs for {exp_id}")
-            if len(job_ids_list) <= 10:
-                print(f"     Job IDs: {' '.join(job_ids_list)}")
-        except subprocess.CalledProcessError as e:
-            print(f"[ERROR] Failed to cancel jobs: {e.stderr}")
-            return []
+        # Cancel jobs through the configured execution backend.
+        failures: List[str] = []
+        for jid in job_ids_list:
+            try:
+                self.backend.cancel(jid)
+            except Exception as e:
+                failures.append(f"{jid}: {e}")
+        if failures:
+            print("[WARN] Some jobs could not be cancelled:")
+            for line in failures:
+                print(f"  {line}")
+        canceled = len(job_ids_list) - len(failures)
+        print(f"[OK] Cancelled {canceled} jobs for {exp_id}")
+        if len(job_ids_list) <= 10:
+            print(f"     Job IDs: {' '.join(job_ids_list)}")
 
         # Update metadata
         if exp_id in self.metadata:
