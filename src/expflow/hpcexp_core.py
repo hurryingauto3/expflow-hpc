@@ -117,6 +117,25 @@ class BatchPreview:
     warnings: List[str]
 
 
+def _resolve_user() -> str:
+    """
+    Resolve the current Unix username with a robust fallback.
+
+    ``os.environ.get("USER", "")`` returns an empty string when ``USER``
+    is unset (containers, cron, login shells without env), and ``squeue
+    -u ""`` matches every job, not nothing. Fall back to
+    ``pwd.getpwuid(os.getuid())`` which always works on POSIX.
+    """
+    user = os.environ.get("USER")
+    if user:
+        return user
+    try:
+        import pwd
+        return pwd.getpwuid(os.getuid()).pw_name
+    except Exception:
+        return ""
+
+
 # =============================================================================
 # Base Experiment Manager
 # =============================================================================
@@ -1741,10 +1760,11 @@ class BaseExperimentManager(ABC):
         if include_matching_name:
             try:
                 result = subprocess.run(
-                    ["squeue", "-u", os.environ.get("USER", ""), "-h", "-o", "%i %j"],
+                    ["squeue", "-u", _resolve_user(), "-h", "-o", "%i %j"],
                     capture_output=True,
                     text=True,
-                    check=True
+                    check=True,
+                    timeout=30,
                 )
                 for line in result.stdout.strip().split("\n"):
                     if not line.strip():
@@ -1757,6 +1777,8 @@ class BaseExperimentManager(ABC):
                         job_ids.add(jid)
             except subprocess.CalledProcessError as e:
                 print(f"Warning: Could not query squeue: {e.stderr}")
+            except subprocess.TimeoutExpired:
+                print("Warning: squeue timed out after 30s")
 
         if not job_ids:
             print(f"No related SLURM jobs found for {exp_id}")
@@ -1847,12 +1869,19 @@ class BaseExperimentManager(ABC):
                     )
 
                 # Optional: allow TLS validation bypass for restricted HPC environments
-                # This is useful when compute nodes have certificate trust issues
+                # This is useful when compute nodes have certificate trust issues.
+                # The warning is emitted on stderr so it shows up in error logs of
+                # whatever wraps expflow, not just the captured stdout.
                 if os.getenv('EXPFLOW_MONGODB_TLS_INSECURE', '').lower() in ('1', 'true', 'yes'):
                     if 'tlsAllowInvalidCertificates=true' not in connection_string:
                         sep = '&' if '?' in connection_string else '?'
                         connection_string = f"{connection_string}{sep}tlsAllowInvalidCertificates=true"
-                    print("[WARN] MongoDB TLS cert validation disabled via EXPFLOW_MONGODB_TLS_INSECURE")
+                    print(
+                        "[SECURITY] MongoDB TLS certificate validation is DISABLED "
+                        "(EXPFLOW_MONGODB_TLS_INSECURE=1). Connection is vulnerable "
+                        "to man-in-the-middle attacks. Use only on trusted networks.",
+                        file=sys.stderr,
+                    )
 
                 self._results_storage = ResultsStorage(
                     backend='mongodb',
@@ -2045,14 +2074,18 @@ class BaseExperimentManager(ABC):
         # Query current SLURM jobs
         try:
             result = subprocess.run(
-                ["squeue", "-u", os.environ.get("USER", ""), "-h", "-o", "%i"],
+                ["squeue", "-u", _resolve_user(), "-h", "-o", "%i"],
                 capture_output=True,
                 text=True,
-                check=True
+                check=True,
+                timeout=30,
             )
             job_ids = [j.strip() for j in result.stdout.strip().split() if j.strip()]
         except subprocess.CalledProcessError as e:
             print(f"[ERROR] Failed to query SLURM jobs: {e.stderr}")
+            return {}
+        except subprocess.TimeoutExpired:
+            print("[ERROR] squeue timed out after 30s")
             return {}
 
         if not job_ids:
@@ -2132,7 +2165,8 @@ class BaseExperimentManager(ABC):
                 sbatch_cmd,
                 capture_output=True,
                 text=True,
-                check=True
+                check=True,
+                timeout=60,
             )
             job_id = result.stdout.strip().split()[-1]
             if verbose:

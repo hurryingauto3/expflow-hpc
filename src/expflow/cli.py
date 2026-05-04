@@ -189,7 +189,7 @@ def cmd_resources(args):
             try:
                 config = load_project_config(args.project_root)
                 exp_config = None
-            except:
+            except Exception:
                 exp_config = None
 
             recommendations = advisor.get_recommendations(
@@ -254,7 +254,7 @@ def cmd_template(args):
     """Create a template experiment configuration"""
     try:
         config = load_project_config()
-    except:
+    except Exception:
         print("Error: Run 'expflow init <project_name>' first")
         sys.exit(1)
 
