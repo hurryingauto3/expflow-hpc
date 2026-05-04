@@ -12,9 +12,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - README example output anonymised — no per-user paths/accounts in
   documentation.
 
-### Notes
-- This release prepares the package for the Phase-1 reusable
-  abstractions extracted from `navsim_manager.py` (separate change).
+### Added — Reusable abstractions extracted from `navsim_manager.py`
+
+So that any manager can ship the same features without copy-pasting:
+
+- `expflow.ResultRecordBuilder` + `BaseRecordEnricher` / `NoopRecordEnricher`
+  for assembling deeply-nested experiment records (architecture / training /
+  evaluation / slurm / git sections, with project-specific enrichment).
+- `expflow.BaseScopeAggregator` (+ `NullScopeAggregator`) for cross-scope
+  evaluation aggregation. A "scope" generalises NAVSIM's per-city eval —
+  cities, dataset shards, sub-tasks, scenario tags all fit. Strict ID
+  matching, weighted "all"-vs-mean aggregation, configurable column map.
+- `expflow.AttemptGrouping` for attempt-group bookkeeping over repeated
+  evaluations of the same checkpoint (`attempt_group_id`, `eval_batch_id`,
+  `attempt_order`, summary statistics). New `attempt_summaries_storage`
+  property on `BaseExperimentManager`.
+- `BaseExperimentManager.register_experiments(...)` plus `expflow register`
+  CLI subcommand for bulk registering YAMLs into the metadata DB.
+- `BaseExperimentManager.submit_experiment(config_overrides=...)` and
+  `BaseExperimentManager.reevaluate_batch(...)` for one-shot config
+  overrides (e.g. re-evaluating under a new evaluator version) without
+  mutating the on-disk YAML.
+- `expflow.script_utils.git_worktree_block(...)` — self-cleaning
+  `git worktree add` block for SLURM scripts so jobs run against an
+  isolated checkout. Plus `quote_bash`, `assert_safe_identifier`.
+- `expflow.EvalLogParser` for log-fallback metric extraction.
+- `expflow.CheckpointResolver.resolve_for_eval(...)` — multi-source
+  checkpoint discovery (registry text file → Hydra config in eval-dir →
+  glob fallback).
+- `expflow.EvalResourceAdvisor` (+ `DefaultEvalResourceAdvisor`) — abstract
+  hook for auto-scaling eval workers / mem / time from config.
+- Live SLURM overlay in `BaseExperimentManager.list_experiments(...)`:
+  surfaces ``running`` / ``pending`` from `squeue` instead of stale
+  metadata. Toggleable with ``live_overlay=False``.
+- `expflow.MatrixExperimentBuilder` — generic M×D Cartesian-product sweep
+  builder with `generate` / `submit` / `status_grid`.
+- `_parse_eval_dir_metadata` parameterised via a new ``scope_labels``
+  class attribute on `BaseExperimentManager` (decouples core from any
+  project-specific scope/city set).
+
+### Added — Tests
+
+- `tests/test_phase1_abstractions.py` — 21 tests covering every
+  Phase-1 abstraction including `assert_safe_identifier` rejecting
+  injection-style identifiers and `git_worktree_block` rejecting unsafe
+  `devkit_subdir` values.
 
 ## [0.9.0] - 2026-03-09
 

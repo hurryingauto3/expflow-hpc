@@ -48,6 +48,15 @@ from .results_storage import (
     export_to_csv,
 )
 
+# Phase-1 abstractions (extracted from navsim_manager.py)
+from .result_record import ResultRecordBuilder, BaseRecordEnricher, NoopRecordEnricher
+from .scope_aggregator import BaseScopeAggregator, NullScopeAggregator
+from .run_history import AttemptGrouping
+from .script_utils import quote_bash, assert_safe_identifier, git_worktree_block
+from .eval_log_parser import EvalLogParser
+from .eval_advisor import EvalResourceAdvisor, DefaultEvalResourceAdvisor
+from .matrix_builder import MatrixExperimentBuilder
+
 __all__ = [
     "BaseExperimentManager",
     "BaseExperimentConfig",
@@ -89,4 +98,17 @@ __all__ = [
     "PostgreSQLBackend",
     "export_to_json",
     "export_to_csv",
+    "ResultRecordBuilder",
+    "BaseRecordEnricher",
+    "NoopRecordEnricher",
+    "BaseScopeAggregator",
+    "NullScopeAggregator",
+    "AttemptGrouping",
+    "quote_bash",
+    "assert_safe_identifier",
+    "git_worktree_block",
+    "EvalLogParser",
+    "EvalResourceAdvisor",
+    "DefaultEvalResourceAdvisor",
+    "MatrixExperimentBuilder",
 ]

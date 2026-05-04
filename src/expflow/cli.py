@@ -763,6 +763,61 @@ def cmd_results_stats(args):
             print(f"  StdDev: {stats['stdev']:.4f}")
 
 
+def _resolve_project_root(project_root_arg: Optional[str] = None) -> Path:
+    """Resolve project root from explicit arg or local .hpc_config.yaml."""
+    if project_root_arg:
+        return Path(project_root_arg)
+    config = load_project_config()
+    return Path(config.project_root)
+
+
+def cmd_register(args):
+    """Bulk-register YAML configs in experiment_configs/ into the metadata DB."""
+    from .hpcexp_core import BaseExperimentManager  # noqa: F401 — type hint only
+    project_root = _resolve_project_root(args.project_root)
+    configs_dir = project_root / "experiment_configs"
+    db_path = configs_dir / "experiments.json"
+
+    metadata = _load_experiments_db(project_root)
+
+    if not configs_dir.exists():
+        print(f"No experiment_configs directory at {configs_dir}")
+        sys.exit(1)
+
+    if args.exp_ids:
+        candidates = list(args.exp_ids)
+    else:
+        candidates = sorted(p.stem for p in configs_dir.glob("*.yaml"))
+
+    import yaml as _yaml
+    registered = 0
+    for exp_id in candidates:
+        config_path = configs_dir / f"{exp_id}.yaml"
+        if not config_path.exists():
+            print(f"  {exp_id:<20} yaml_missing")
+            continue
+        if exp_id in metadata and not args.force:
+            print(f"  {exp_id:<20} already_present")
+            continue
+        with open(config_path) as f:
+            _yaml.safe_load(f)  # validate parseable
+        metadata[exp_id] = {
+            "exp_id": exp_id,
+            "status": "created",
+            "train_script_path": None,
+            "eval_script_path": None,
+            "train_job_id": None,
+            "eval_job_id": None,
+            "results": {},
+        }
+        print(f"  {exp_id:<20} registered")
+        registered += 1
+
+    if registered:
+        _save_experiments_db(project_root, metadata)
+    print(f"\n[OK] Registered {registered} experiment(s)")
+
+
 def main():
     """Main CLI entry point"""
     parser = argparse.ArgumentParser(
@@ -1019,6 +1074,26 @@ Examples:
         help="Metrics to analyze (e.g., 'results.pdm_score' 'results.val_loss')"
     )
 
+    # Bulk-register YAML configs in experiment_configs/ into the metadata DB
+    register_parser = subparsers.add_parser(
+        "register",
+        help="Register YAML configs from experiment_configs/ into metadata DB",
+    )
+    register_parser.add_argument(
+        "exp_ids",
+        nargs="*",
+        help="Specific exp IDs to register (default: scan for any unregistered YAML)",
+    )
+    register_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-register even if already present (resets status to 'created')",
+    )
+    register_parser.add_argument(
+        "--project-root",
+        help="Project root override (default: current project)",
+    )
+
     args = parser.parse_args()
 
     if not args.command:
@@ -1062,6 +1137,8 @@ Examples:
         else:
             print("Use: expflow results {collect|query|export|stats}")
             sys.exit(1)
+    elif args.command == "register":
+        cmd_register(args)
 
 
 if __name__ == "__main__":
