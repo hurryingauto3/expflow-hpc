@@ -2,7 +2,7 @@
 
 > Lightweight experiment tracking for HPC clusters. Stop manually editing SLURM scripts.
 
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![SLURM](https://img.shields.io/badge/HPC-SLURM-orange.svg)](https://slurm.schedmd.com/)
 
@@ -101,11 +101,11 @@ Output:
 ======================================================================
 HPC Environment Information
 ======================================================================
-Username: ah7072
-Scratch: /scratch/ah7072
-Cluster: greene
-Accounts: torch_pr_68_general, torch_pr_68_tandon_advanced
-Partitions: l40s_public, h200_public, rtx8000
+Username: <you>
+Scratch: $SCRATCH
+Cluster: <detected>
+Accounts: <your slurm accounts>
+Partitions: <available partitions>
 ```
 
 ### 3. Create Experiment Template

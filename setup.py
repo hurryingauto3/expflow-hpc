@@ -12,7 +12,7 @@ long_description = readme_file.read_text() if readme_file.exists() else ""
 
 setup(
     name="expflow",
-    version="0.9.0",
+    version="0.10.1",
     author="Ali Hamza",
     author_email="ah7072@nyu.edu",
     description="Lightweight experiment tracking for HPC clusters",
@@ -32,12 +32,12 @@ setup(
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
         "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
     ],
-    python_requires=">=3.8",
+    python_requires=">=3.9",
     install_requires=[
         "pyyaml>=6.0",
         "pandas>=1.3.0",
