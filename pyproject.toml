@@ -1,0 +1,89 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "expflow"
+version = "0.10.1"
+description = "Lightweight experiment tracking for HPC clusters (SLURM-first; runs on a laptop too)."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+authors = [
+    { name = "ExpFlow contributors" },
+]
+keywords = [
+    "hpc",
+    "slurm",
+    "experiment-tracking",
+    "machine-learning",
+    "research",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+]
+dependencies = [
+    # Only YAML is mandatory; everything else is an optional extra.
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+analysis = [
+    # CSV export, results harvester, results pipeline. Imported lazily in
+    # the modules that need it; install with ``pip install expflow[analysis]``
+    # if you hit "pandas not installed" on those code paths.
+    "pandas>=1.3.0",
+]
+ai = ["google-generativeai>=0.3.0"]
+mongodb = ["pymongo>=4.0.0"]
+postgresql = ["psycopg2-binary>=2.9.0"]
+remote = ["pymongo>=4.0.0", "psycopg2-binary>=2.9.0"]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+expflow = "expflow.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/hurryingauto3/expflow-hpc"
+Issues = "https://github.com/hurryingauto3/expflow-hpc/issues"
+Source = "https://github.com/hurryingauto3/expflow-hpc"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+expflow = ["templates/*.yaml", "templates/*.sh"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "W",   # pycodestyle warnings
+    "I",   # isort
+    "B",   # bugbear
+]
+ignore = [
+    "E501",  # line-too-long: enforced by formatter, not lint
+    "B008",  # function call in default argument: common in dataclasses
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

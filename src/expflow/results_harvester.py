@@ -13,17 +13,27 @@ Features:
 - CSV export for analysis
 """
 
-import json
-import os
-import re
 import glob
+import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import pandas as pd
+try:
+    import pandas as pd
+except ImportError:  # pragma: no cover - optional dep
+    pd = None  # type: ignore
+
+
+def _require_pandas():
+    if pd is None:
+        raise ImportError(
+            "results_harvester needs pandas — install with "
+            "`pip install expflow[analysis]`"
+        )
+    return pd
 
 try:
     from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
@@ -412,8 +422,9 @@ class BaseResultsHarvester(ABC):
             eval_rows.append(row)
 
         # Merge
-        train_df = pd.DataFrame(train_rows)
-        eval_df = pd.DataFrame(eval_rows)
+        _pd = _require_pandas()
+        train_df = _pd.DataFrame(train_rows)
+        eval_df = _pd.DataFrame(eval_rows)
 
         if not train_df.empty and not eval_df.empty:
             merged_df = train_df.merge(eval_df, on='exp_id', how='outer')
@@ -510,7 +521,7 @@ class BaseResultsHarvester(ABC):
                     training_metrics.plot_path = str(plot_path)
                     print(f"  ✓ Plot: {plot_path}")
         else:
-            print(f"  ✗ No training metrics found")
+            print("  ✗ No training metrics found")
 
         # Harvest evaluation metrics
         eval_metrics = self.harvest_evaluation_metrics(exp_id)
@@ -519,7 +530,7 @@ class BaseResultsHarvester(ABC):
                 score_str = f"{em.score:.4f}" if em.score else "N/A"
                 print(f"  ✓ Evaluation ({em.eval_split}): score={score_str}")
         else:
-            print(f"  ✗ No evaluation metrics found")
+            print("  ✗ No evaluation metrics found")
 
         return training_metrics, eval_metrics
 

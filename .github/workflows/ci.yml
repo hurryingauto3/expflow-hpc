@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install package + test extras
+        run: |
+          python -m pip install --upgrade pip
+          # Install with the analysis extra so pandas-using paths can be
+          # exercised, plus the dev extra for pytest/ruff. PostgreSQL extra
+          # is included so the SQL-injection guard tests run on every
+          # matrix cell.
+          pip install -e ".[analysis,postgresql,dev]"
+
+      - name: Lint (ruff)
+        run: |
+          ruff check src/ tests/
+
+      - name: Run tests
+        run: |
+          pytest -q tests/
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Build sdist + wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+      - name: Verify install from wheel
+        run: |
+          python -m venv /tmp/v
+          /tmp/v/bin/pip install dist/*.whl
+          /tmp/v/bin/python -c "import expflow; print(expflow.__version__)"
+          /tmp/v/bin/expflow --help | head -3

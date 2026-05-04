@@ -6,11 +6,10 @@ validating that all required artifacts exist before running analysis jobs.
 """
 
 import glob as _glob
-import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union, TYPE_CHECKING
+from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
 import yaml
 
@@ -101,6 +100,101 @@ class CheckpointResolver:
             if m:
                 return int(m.group(1))
         return -1
+
+    # ------------------------------------------------------------------
+    # Multi-source checkpoint resolution for re-evaluation
+    # (extracted from navsim_manager._resolve_checkpoint_for_eval +
+    #  _resolve_checkpoint_from_eval_dirs)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def resolve_for_eval(
+        exp_id: str,
+        registry_dir: Optional[Path] = None,
+        eval_dirs: Optional[List[Path]] = None,
+        glob_root: Optional[Path] = None,
+        config_loaders: Optional[List["object"]] = None,
+    ) -> Dict[str, Optional[str]]:
+        """
+        Locate the checkpoint that an evaluation should re-load.
+
+        Tries three sources in order:
+          1. ``registry_dir / "{exp_id}.txt"`` — a single-line text file
+             containing the checkpoint path (the convention used by
+             ExpFlow's training scripts).
+          2. ``eval_dirs[i]/code/hydra/config.yaml`` — the Hydra config
+             saved alongside an existing eval; reads ``checkpoint_path``
+             out of it. Requires PyYAML.
+          3. ``glob_root / exp_id / *.ckpt|*.pth`` — fallback by
+             ``resolve(...)`` on common patterns.
+
+        Returns:
+            Dict with ``checkpoint_path`` (str | None), ``checkpoint_epoch``
+            (int | None), and ``source`` (``"registry"`` | ``"eval_config"``
+            | ``"glob"`` | ``None``).
+        """
+        # 1) Registry text file
+        if registry_dir is not None:
+            registry_file = Path(registry_dir) / f"{exp_id}.txt"
+            if registry_file.exists():
+                try:
+                    ckpt = registry_file.read_text().strip()
+                    if ckpt:
+                        return {
+                            "checkpoint_path": ckpt,
+                            "checkpoint_epoch": _maybe_epoch(ckpt),
+                            "source": "registry",
+                        }
+                except OSError:
+                    pass
+
+        # 2) Hydra config inside an eval-dir
+        if eval_dirs:
+            try:
+                import yaml as _yaml
+            except ImportError:
+                _yaml = None  # type: ignore
+            if _yaml is not None:
+                for eval_dir in eval_dirs:
+                    cfg_path = Path(eval_dir) / "code" / "hydra" / "config.yaml"
+                    if not cfg_path.exists():
+                        continue
+                    try:
+                        with open(cfg_path) as fh:
+                            cfg = _yaml.safe_load(fh) or {}
+                        ckpt = cfg.get("checkpoint_path") or (
+                            cfg.get("agent", {}).get("checkpoint_path")
+                            if isinstance(cfg.get("agent"), dict)
+                            else None
+                        )
+                        if ckpt:
+                            return {
+                                "checkpoint_path": ckpt,
+                                "checkpoint_epoch": _maybe_epoch(ckpt),
+                                "source": "eval_config",
+                            }
+                    except Exception:
+                        continue
+
+        # 3) Glob fallback
+        if glob_root is not None:
+            base = Path(glob_root) / exp_id
+            for pat in ("*.ckpt", "*.pth", "*best*", "*.safetensors"):
+                m = CheckpointResolver.resolve(str(base / pat), strategy="name_epoch")
+                if m:
+                    return {
+                        "checkpoint_path": m,
+                        "checkpoint_epoch": _maybe_epoch(m),
+                        "source": "glob",
+                    }
+
+        return {"checkpoint_path": None, "checkpoint_epoch": None, "source": None}
+
+
+def _maybe_epoch(path: str) -> Optional[int]:
+    """Best-effort epoch extraction from a checkpoint filename."""
+    e = CheckpointResolver._extract_epoch(path)
+    return e if e >= 0 else None
 
 
 # =============================================================================

@@ -9,7 +9,7 @@ the best account for a given partition.
 
 import subprocess
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 @dataclass
@@ -155,7 +155,7 @@ class PartitionValidator:
                         accounts.append(account)
                 # Deduplicate
                 return list(dict.fromkeys(accounts))
-        except:
+        except Exception:
             pass
 
         return []
@@ -178,7 +178,7 @@ class PartitionValidator:
                         partitions.append(partition)
                 # Deduplicate
                 return list(dict.fromkeys(partitions))
-        except:
+        except Exception:
             pass
 
         return []

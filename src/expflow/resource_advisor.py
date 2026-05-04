@@ -27,17 +27,15 @@ Usage:
 """
 
 import argparse
-import json
 import os
-import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-import yaml
 
+import yaml
 
 # =============================================================================
 # Data Classes
@@ -418,7 +416,7 @@ class ResourceAdvisor:
                 context += f"  Est. wait: {info.avg_wait_time_mins or 'N/A'} mins\n\n"
 
             if exp_config:
-                context += f"\nExperiment Requirements:\n"
+                context += "\nExperiment Requirements:\n"
                 context += f"  Current partition: {exp_config.get('partition', 'unknown')}\n"
                 context += f"  Current GPUs: {exp_config.get('num_gpus', 'unknown')}\n"
                 context += f"  Batch size: {exp_config.get('batch_size', 'unknown')}\n"
@@ -463,7 +461,7 @@ Provide a concise recommendation (2-3 sentences) with reasoning.
 
             if info.avg_wait_time_mins is not None:
                 if info.avg_wait_time_mins == 0:
-                    print(f"   Wait Time:  Ready now")
+                    print("   Wait Time:  Ready now")
                 else:
                     print(f"   Wait Time: ~{info.avg_wait_time_mins:.0f} minutes")
 
@@ -509,7 +507,7 @@ Provide a concise recommendation (2-3 sentences) with reasoning.
             print(f"   Precision: {rec.precision_recommendation}")
 
             if rec.warnings:
-                print(f"    Warnings:")
+                print("    Warnings:")
                 for warning in rec.warnings:
                     print(f"      - {warning}")
 
@@ -541,7 +539,7 @@ def main():
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
     # Status command
-    status_parser = subparsers.add_parser("status", help="Show current resource status")
+    subparsers.add_parser("status", help="Show current resource status")
 
     # Analyze command
     analyze_parser = subparsers.add_parser("analyze", help="Analyze resources and show recommendations")

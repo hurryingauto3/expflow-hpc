@@ -6,8 +6,9 @@ Provides a CLI menu-based setup experience with intelligent recommendations
 """
 
 import sys
-from typing import Dict, List, Optional, Tuple
-from .hpc_config import HPCEnvironment, HPCConfig
+from typing import Dict, List
+
+from .hpc_config import HPCConfig, HPCEnvironment
 from .partition_validator import PartitionValidator
 
 
@@ -196,7 +197,7 @@ def _select_partition_interactive(
         if gpu_type != 'Other':
             print(f"  {gpu_type} GPUs:")
         else:
-            print(f"  Other:")
+            print("  Other:")
 
         for partition in partitions:
             is_public = 'public' in partition.lower()

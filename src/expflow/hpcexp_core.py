@@ -6,20 +6,19 @@ This is the base framework that can be customized for any deep learning project.
 Users subclass BaseExperimentManager and implement project-specific methods.
 """
 
-import argparse
 import json
 import os
 import subprocess
 import sys
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional, Tuple
+
 import yaml
 
-from .hpc_config import HPCConfig, load_project_config
-
+from .hpc_config import HPCConfig
 
 # =============================================================================
 # Base Configuration Classes
@@ -117,6 +116,25 @@ class BatchPreview:
     warnings: List[str]
 
 
+def _resolve_user() -> str:
+    """
+    Resolve the current Unix username with a robust fallback.
+
+    ``os.environ.get("USER", "")`` returns an empty string when ``USER``
+    is unset (containers, cron, login shells without env), and ``squeue
+    -u ""`` matches every job, not nothing. Fall back to
+    ``pwd.getpwuid(os.getuid())`` which always works on POSIX.
+    """
+    user = os.environ.get("USER")
+    if user:
+        return user
+    try:
+        import pwd
+        return pwd.getpwuid(os.getuid()).pw_name
+    except Exception:
+        return ""
+
+
 # =============================================================================
 # Base Experiment Manager
 # =============================================================================
@@ -132,12 +150,18 @@ class BaseExperimentManager(ABC):
     4. Implement harvest_results() for your output format
     """
 
-    def __init__(self, hpc_config: HPCConfig):
+    def __init__(self, hpc_config: HPCConfig, *, backend=None):
         """
-        Initialize experiment manager
+        Initialize experiment manager.
 
         Args:
             hpc_config: HPC configuration object
+            backend:    Optional ``ExecutionBackend`` instance. If
+                        ``None`` (default), auto-detects: ``SlurmBackend``
+                        when ``sbatch`` is on ``PATH``, else
+                        ``LocalBackend`` rooted at ``project_root``. Pass
+                        a backend explicitly to force a specific path
+                        (laptop testing, CI, etc.).
         """
         self.hpc_config = hpc_config
 
@@ -170,6 +194,12 @@ class BaseExperimentManager(ABC):
             self.results_dir / "analysis"
         ]:
             directory.mkdir(parents=True, exist_ok=True)
+
+        # Execution backend (Phase 2): laptop, CI, or SLURM cluster.
+        if backend is None:
+            from .execution import auto_detect_backend
+            backend = auto_detect_backend(self.project_root)
+        self.backend = backend
 
         # Load metadata
         self._load_metadata()
@@ -317,6 +347,143 @@ class BaseExperimentManager(ABC):
               f"yaml_written={len(warnings)}")
         return {"migrated": migrated, "skipped": skipped, "warnings": warnings}
 
+    # =========================================================================
+    # Bulk YAML registration (extracted from navsim_manager.register_experiments)
+    # =========================================================================
+
+    def register_experiments(
+        self,
+        exp_ids: Optional[List[str]] = None,
+        force: bool = False,
+    ) -> Dict[str, str]:
+        """
+        Register YAML configs in ``configs_dir`` into the metadata DB.
+
+        Useful when configs are added out-of-band (cherry-picked, manually
+        copied) since ``_load_metadata`` only reads the JSON DB and does
+        not rescan the configs directory. Without registration, downstream
+        operations (``submit_experiment``, ``reevaluate_batch``) treat the
+        experiment as unknown.
+
+        Args:
+            exp_ids: Explicit IDs to register. If None, scan for any
+                     YAML in ``configs_dir`` not yet registered.
+            force:   Re-register even if already present (resets status
+                     to ``"created"``).
+
+        Returns:
+            Dict mapping exp_id -> action: ``"registered"`` |
+            ``"already_present"`` | ``"yaml_missing"``.
+        """
+        if exp_ids is None:
+            candidates = sorted(p.stem for p in self.configs_dir.glob("*.yaml"))
+        else:
+            candidates = list(exp_ids)
+
+        results: Dict[str, str] = {}
+        registered_count = 0
+        for exp_id in candidates:
+            config_path = self.configs_dir / f"{exp_id}.yaml"
+            if not config_path.exists():
+                results[exp_id] = "yaml_missing"
+                continue
+            if exp_id in self.metadata and not force:
+                results[exp_id] = "already_present"
+                continue
+            with open(config_path) as f:
+                yaml.safe_load(f)  # validate parseable
+            self.metadata[exp_id] = {
+                "exp_id": exp_id,
+                "status": "created",
+                "train_script_path": None,
+                "eval_script_path": None,
+                "run_id": None,
+                "results": {},
+            }
+            results[exp_id] = "registered"
+            registered_count += 1
+
+        if registered_count > 0:
+            self._save_metadata()
+        print(f"register_experiments: registered={registered_count}/{len(candidates)}")
+        return results
+
+    # =========================================================================
+    # Re-evaluation with config overrides (extracted from navsim reeval_v1_1)
+    # =========================================================================
+
+    def reevaluate_batch(
+        self,
+        exp_ids: Optional[List[str]] = None,
+        overrides: Optional[Dict[str, Any]] = None,
+        *,
+        dry_run: bool = True,
+        eval_only: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Re-submit a batch of experiments with per-call config overrides.
+
+        Walks ``exp_ids`` (or every registered experiment with a checkpoint
+        under ``checkpoints_dir`` when ``exp_ids`` is None), and submits
+        each one with ``overrides`` merged into its YAML config. The
+        overrides are not written back to disk; they only apply to the
+        in-flight submission.
+
+        Args:
+            exp_ids:   Explicit IDs to re-evaluate. None → scan registry.
+            overrides: Dict merged into each loaded config before script
+                       generation. Use this to flip e.g. an evaluator
+                       version, eval split, or output suffix.
+            dry_run:   If True, print plans without submitting (default).
+            eval_only: Skip training (default — re-eval is the typical
+                       use case).
+
+        Returns:
+            Dict mapping exp_id -> per-experiment result info or status
+            string.
+        """
+        overrides = overrides or {}
+        if exp_ids is None:
+            if not self.checkpoints_dir.exists():
+                print(f"No checkpoints directory at {self.checkpoints_dir}")
+                return {}
+            exp_ids = sorted(p.stem for p in self.checkpoints_dir.glob("*.txt"))
+
+        plan: List[str] = []
+        skipped: List[Tuple[str, str]] = []  # noqa: F821 — declared above
+        for exp_id in exp_ids:
+            if exp_id not in self.metadata:
+                skipped.append((exp_id, "not in metadata"))
+                continue
+            plan.append(exp_id)
+
+        print(f"reevaluate_batch plan: {len(plan)} experiments, overrides={overrides}")
+        for exp_id in plan:
+            print(f"  {exp_id}")
+        if skipped:
+            print("Skipped:")
+            for exp_id, reason in skipped:
+                print(f"  {exp_id}: {reason}")
+
+        if dry_run:
+            print("(dry-run; pass dry_run=False to actually submit)")
+            return {exp_id: {"status": "planned"} for exp_id in plan}
+
+        results: Dict[str, Any] = {}
+        for exp_id in plan:
+            try:
+                results[exp_id] = self.submit_experiment(
+                    exp_id,
+                    eval_only=eval_only,
+                    dry_run=False,
+                    config_overrides=overrides,
+                )
+            except SystemExit:
+                results[exp_id] = {"status": "failed_to_submit"}
+            except Exception as e:
+                results[exp_id] = {"status": "error", "error": str(e)}
+        return results
+
     @abstractmethod
     def _generate_train_script(self, config: Any) -> str:
         """
@@ -410,7 +577,7 @@ class BaseExperimentManager(ABC):
         elif module_loads and conda_env:
             # Assume module provides conda
             script_lines.extend([
-                f"source $(conda info --base)/etc/profile.d/conda.sh",
+                "source $(conda info --base)/etc/profile.d/conda.sh",
                 f"conda activate {conda_env}"
             ])
 
@@ -450,17 +617,17 @@ class BaseExperimentManager(ABC):
         # Create temporary script
         exp_id = config.get('exp_id', 'unknown')
         script_lines = [
-            f"# Create temporary script for container execution",
+            "# Create temporary script for container execution",
             f"TEMP_SCRIPT=$(mktemp /tmp/{exp_id}_XXXXXX.sh)",
-            f"cat > \"${{TEMP_SCRIPT}}\" << 'CONTAINER_SCRIPT_EOF'",
-            f"#!/bin/bash",
+            "cat > \"${TEMP_SCRIPT}\" << 'CONTAINER_SCRIPT_EOF'",
+            "#!/bin/bash",
             script_content,
-            f"CONTAINER_SCRIPT_EOF",
-            f"chmod +x \"${{TEMP_SCRIPT}}\"",
-            f"",
-            f"# Execute in container",
-            f"apptainer exec \\",
-            f"    --nv \\",
+            "CONTAINER_SCRIPT_EOF",
+            "chmod +x \"${TEMP_SCRIPT}\"",
+            "",
+            "# Execute in container",
+            "apptainer exec \\",
+            "    --nv \\",
         ]
 
         if bind_args:
@@ -474,10 +641,10 @@ class BaseExperimentManager(ABC):
 
         script_lines.extend([
             f"    \"{container}\" \\",
-            f"    bash \"${{TEMP_SCRIPT}}\"",
-            f"",
-            f"# Cleanup",
-            f"rm -f \"${{TEMP_SCRIPT}}\""
+            "    bash \"${TEMP_SCRIPT}\"",
+            "",
+            "# Cleanup",
+            "rm -f \"${TEMP_SCRIPT}\""
         ])
 
         return "\n".join(script_lines)
@@ -583,21 +750,21 @@ class BaseExperimentManager(ABC):
         log_file = self.logs_dir / "output" / f"{exp_id}_gpu_${{SLURM_JOB_ID}}.csv"
 
         script_lines = [
-            f"# Start GPU monitoring",
-            f"nvidia-smi \\",
-            f"    --query-gpu=timestamp,name,utilization.gpu,utilization.memory,memory.used,memory.total \\",
-            f"    --format=csv \\",
+            "# Start GPU monitoring",
+            "nvidia-smi \\",
+            "    --query-gpu=timestamp,name,utilization.gpu,utilization.memory,memory.used,memory.total \\",
+            "    --format=csv \\",
             f"    -l {interval} \\",
             f"    > {log_file} &",
-            f"GPU_MONITOR_PID=$!",
-            f"",
-            f"# Cleanup function",
-            f"cleanup_gpu_monitor() {{",
-            f"    if [ ! -z \"${{GPU_MONITOR_PID}}\" ]; then",
-            f"        kill ${{GPU_MONITOR_PID}} 2>/dev/null || true",
-            f"    fi",
-            f"}}",
-            f"trap cleanup_gpu_monitor EXIT"
+            "GPU_MONITOR_PID=$!",
+            "",
+            "# Cleanup function",
+            "cleanup_gpu_monitor() {",
+            "    if [ ! -z \"${GPU_MONITOR_PID}\" ]; then",
+            "        kill ${GPU_MONITOR_PID} 2>/dev/null || true",
+            "    fi",
+            "}",
+            "trap cleanup_gpu_monitor EXIT"
         ]
 
         return "\n".join(script_lines)
@@ -952,9 +1119,22 @@ class BaseExperimentManager(ABC):
         exp_id: str,
         train_only: bool = False,
         eval_only: bool = False,
-        dry_run: bool = False
+        dry_run: bool = False,
+        config_overrides: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, str]:
-        """Submit experiment to SLURM"""
+        """
+        Submit experiment to SLURM.
+
+        Args:
+            exp_id: Experiment to submit.
+            train_only / eval_only: limit which scripts get generated.
+            dry_run: write scripts but don't sbatch.
+            config_overrides: Optional dict merged into the loaded YAML
+                config before script generation. The override applies
+                only to this submission — it is NOT written back to the
+                YAML on disk. Useful for one-off re-evaluations under a
+                different evaluator version, eval split, etc.
+        """
 
         if exp_id not in self.metadata:
             print(f"Error: Experiment {exp_id} not found.")
@@ -965,6 +1145,9 @@ class BaseExperimentManager(ABC):
 
         # Load fresh config from YAML (single source of truth)
         full_config = self._load_config(exp_id)
+        if config_overrides:
+            # Shallow merge — overrides win over YAML, never persisted.
+            full_config = {**full_config, **config_overrides}
 
         # Generate scripts
         train_script_path = self.generated_dir / f"train_{exp_id}.slurm"
@@ -985,42 +1168,30 @@ class BaseExperimentManager(ABC):
             print(f" Generated evaluation script: {eval_script_path}")
 
         if dry_run:
+            backend_name = getattr(self.backend, "backend_name", "slurm")
+            verb = "sbatch" if backend_name == "slurm" else "bash"
+            dep_hint = "--dependency=afterok:TRAIN_JOB_ID" if backend_name == "slurm" else "(after train)"
             print("\n[DRY RUN] Would submit the following jobs:")
             if not eval_only:
-                print(f"  Training: sbatch {train_script_path}")
+                print(f"  Training: {verb} {train_script_path}")
             if not train_only:
-                print(f"  Evaluation: sbatch --dependency=afterok:TRAIN_JOB_ID {eval_script_path}")
+                print(f"  Evaluation: {verb} {dep_hint} {eval_script_path}")
             return {}
 
-        # Submit to SLURM
+        # Submit through the configured execution backend.
         job_ids = {}
 
         try:
             if not eval_only:
-                result = subprocess.run(
-                    ["sbatch", str(train_script_path)],
-                    capture_output=True,
-                    text=True,
-                    check=True
-                )
-                # Parse job ID from "Submitted batch job 12345"
-                train_job_id = result.stdout.strip().split()[-1]
+                train_job_id = self.backend.submit(train_script_path)
                 job_ids["train_job_id"] = train_job_id
                 print(f" Submitted training job: {train_job_id}")
 
             if not train_only:
-                cmd = ["sbatch"]
-                if "train_job_id" in job_ids:
-                    cmd.extend(["--dependency", f"afterok:{job_ids['train_job_id']}"])
-                cmd.append(str(eval_script_path))
-
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    check=True
+                deps = (
+                    [job_ids["train_job_id"]] if "train_job_id" in job_ids else None
                 )
-                eval_job_id = result.stdout.strip().split()[-1]
+                eval_job_id = self.backend.submit(eval_script_path, depends_on=deps)
                 job_ids["eval_job_id"] = eval_job_id
                 print(f" Submitted evaluation job: {eval_job_id}")
 
@@ -1033,12 +1204,34 @@ class BaseExperimentManager(ABC):
             return job_ids
 
         except subprocess.CalledProcessError as e:
-            print(f"Error submitting jobs:")
+            print("Error submitting jobs:")
             print(e.stderr)
             sys.exit(1)
 
-    def list_experiments(self, status: Optional[str] = None, tags: Optional[List[str]] = None):
-        """List all experiments with optional filtering"""
+    def list_experiments(
+        self,
+        status: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        live_overlay: bool = True,
+    ):
+        """
+        List all experiments with optional filtering.
+
+        Args:
+            status: filter by exact status string (e.g. ``"submitted"``).
+            tags: filter to experiments matching at least one of these tags.
+            live_overlay: when True (default), merge in live SLURM job
+                states from ``squeue`` so a stored ``submitted`` row shows
+                as ``running`` / ``pending`` if its train_job_id is in
+                queue. Set False to skip the squeue call.
+        """
+
+        live_jobs: Dict[str, Dict[str, str]] = {}
+        if live_overlay:
+            try:
+                live_jobs = self._get_slurm_jobs()
+            except Exception:
+                live_jobs = {}
 
         filtered = []
         for exp_id, meta in self.metadata.items():
@@ -1061,6 +1254,20 @@ class BaseExperimentManager(ABC):
             raw_desc = record.get("description", "")
             desc = raw_desc[:47] + "..." if len(raw_desc) > 50 else raw_desc
             status_str = meta.get("status", "unknown")
+            # Live SLURM overlay: if any registered job for this experiment
+            # is in the live queue, surface its state instead of stale
+            # metadata (running > pending > submitted by precedence).
+            if live_jobs:
+                ids = []
+                for k in ("train_job_id", "eval_job_id"):
+                    if meta.get(k):
+                        ids.append(str(meta[k]))
+                ids.extend(str(j) for j in (meta.get("eval_job_ids") or []))
+                live_states = [live_jobs[j]["state"].lower() for j in ids if j in live_jobs]
+                for preferred in ("running", "pending", "configuring", "completing"):
+                    if preferred in live_states:
+                        status_str = preferred
+                        break
             print(f"{exp_id:<15} {status_str:<12} {desc:<50}")
 
     def show_experiment(self, exp_id: str):
@@ -1086,17 +1293,17 @@ class BaseExperimentManager(ABC):
             "resume_epoch", "resume_count", "train_job_id", "eval_job_id",
             "eval_job_ids", "cancelled_at"
         }
-        print(f"\nConfiguration:")
+        print("\nConfiguration:")
         for key, value in record.items():
             if key not in state_keys:
                 print(f"  {key}: {value}")
 
         if meta.get("results"):
-            print(f"\nResults:")
+            print("\nResults:")
             for key, value in meta["results"].items():
                 print(f"  {key}: {value}")
 
-        print(f"\nTimeline:")
+        print("\nTimeline:")
         print(f"  Created: {record.get('created_at', 'N/A')}")
         if meta.get("submitted_at"):
             print(f"  Submitted: {meta['submitted_at']}")
@@ -1104,7 +1311,7 @@ class BaseExperimentManager(ABC):
             print(f"  Completed: {meta['completed_at']}")
 
         if record.get("git_commit"):
-            print(f"\nGit:")
+            print("\nGit:")
             print(f"  Commit: {record['git_commit'][:8]}")
             print(f"  Branch: {record.get('git_branch', 'N/A')}")
 
@@ -1139,30 +1346,17 @@ class BaseExperimentManager(ABC):
         print(f" Exported {len(records)} experiments to {output_file}")
 
     def _get_slurm_jobs(self) -> Dict[str, Dict[str, str]]:
-        """Get current SLURM jobs for this user"""
+        """
+        Return live job listing from the configured execution backend.
+
+        Method name kept as ``_get_slurm_jobs`` for backwards-compat with
+        existing callers; under the hood it now delegates to
+        ``self.backend.list_jobs()`` which returns a normalised state
+        vocabulary (queued/running/completed/failed/cancelled/unknown)
+        regardless of backend.
+        """
         try:
-            result = subprocess.run(
-                ["squeue", "-u", os.environ.get("USER", ""), "-h",
-                 "-o", "%.18i %.9P %.50j %.8T %.10M %.6D %R"],
-                capture_output=True, text=True
-            )
-            jobs = {}
-            for line in result.stdout.strip().split("\n"):
-                if not line.strip():
-                    continue
-                parts = line.split()
-                if len(parts) >= 4:
-                    job_id = parts[0].strip()
-                    jobs[job_id] = {
-                        "job_id": job_id,
-                        "partition": parts[1].strip(),
-                        "name": parts[2].strip(),
-                        "state": parts[3].strip(),
-                        "time": parts[4].strip() if len(parts) > 4 else "",
-                        "nodes": parts[5].strip() if len(parts) > 5 else "",
-                        "nodelist": parts[6].strip() if len(parts) > 6 else ""
-                    }
-            return jobs
+            return self.backend.list_jobs()
         except Exception:
             return {}
 
@@ -1328,7 +1522,7 @@ class BaseExperimentManager(ABC):
         # Check if new experiment ID already exists
         if new_exp_id in self.metadata:
             print(f"Error: Experiment {new_exp_id} already exists")
-            print(f"  Specify a different new_exp_id or delete the existing experiment")
+            print("  Specify a different new_exp_id or delete the existing experiment")
             sys.exit(1)
 
         # Create new config based on source config
@@ -1416,7 +1610,7 @@ class BaseExperimentManager(ABC):
             print("\nNo active jobs")
 
         # Show recent experiments
-        print(f"\nRecent Experiments:")
+        print("\nRecent Experiments:")
         print(f"{'ID':<15} {'Status':<12} {'Train Job':<12} {'Eval Job':<12} {'Description'}")
         print("-" * 80)
 
@@ -1565,10 +1759,11 @@ class BaseExperimentManager(ABC):
         if include_matching_name:
             try:
                 result = subprocess.run(
-                    ["squeue", "-u", os.environ.get("USER", ""), "-h", "-o", "%i %j"],
+                    ["squeue", "-u", _resolve_user(), "-h", "-o", "%i %j"],
                     capture_output=True,
                     text=True,
-                    check=True
+                    check=True,
+                    timeout=30,
                 )
                 for line in result.stdout.strip().split("\n"):
                     if not line.strip():
@@ -1581,6 +1776,8 @@ class BaseExperimentManager(ABC):
                         job_ids.add(jid)
             except subprocess.CalledProcessError as e:
                 print(f"Warning: Could not query squeue: {e.stderr}")
+            except subprocess.TimeoutExpired:
+                print("Warning: squeue timed out after 30s")
 
         if not job_ids:
             print(f"No related SLURM jobs found for {exp_id}")
@@ -1595,15 +1792,21 @@ class BaseExperimentManager(ABC):
                 print(f"  {jid}")
             return job_ids_list
 
-        # Cancel jobs
-        try:
-            subprocess.run(["scancel", *job_ids_list], check=True)
-            print(f"[OK] Canceled {len(job_ids_list)} jobs for {exp_id}")
-            if len(job_ids_list) <= 10:
-                print(f"     Job IDs: {' '.join(job_ids_list)}")
-        except subprocess.CalledProcessError as e:
-            print(f"[ERROR] Failed to cancel jobs: {e.stderr}")
-            return []
+        # Cancel jobs through the configured execution backend.
+        failures: List[str] = []
+        for jid in job_ids_list:
+            try:
+                self.backend.cancel(jid)
+            except Exception as e:
+                failures.append(f"{jid}: {e}")
+        if failures:
+            print("[WARN] Some jobs could not be cancelled:")
+            for line in failures:
+                print(f"  {line}")
+        canceled = len(job_ids_list) - len(failures)
+        print(f"[OK] Cancelled {canceled} jobs for {exp_id}")
+        if len(job_ids_list) <= 10:
+            print(f"     Job IDs: {' '.join(job_ids_list)}")
 
         # Update metadata
         if exp_id in self.metadata:
@@ -1649,8 +1852,9 @@ class BaseExperimentManager(ABC):
             manager.results_storage
         """
         if not hasattr(self, '_results_storage'):
-            from .results_storage import ResultsStorage
             import os
+
+            from .results_storage import ResultsStorage
 
             # Get backend configuration from environment
             backend = os.getenv('EXPFLOW_BACKEND', 'sqlite')
@@ -1665,19 +1869,26 @@ class BaseExperimentManager(ABC):
                     )
 
                 # Optional: allow TLS validation bypass for restricted HPC environments
-                # This is useful when compute nodes have certificate trust issues
+                # This is useful when compute nodes have certificate trust issues.
+                # The warning is emitted on stderr so it shows up in error logs of
+                # whatever wraps expflow, not just the captured stdout.
                 if os.getenv('EXPFLOW_MONGODB_TLS_INSECURE', '').lower() in ('1', 'true', 'yes'):
                     if 'tlsAllowInvalidCertificates=true' not in connection_string:
                         sep = '&' if '?' in connection_string else '?'
                         connection_string = f"{connection_string}{sep}tlsAllowInvalidCertificates=true"
-                    print("[WARN] MongoDB TLS cert validation disabled via EXPFLOW_MONGODB_TLS_INSECURE")
+                    print(
+                        "[SECURITY] MongoDB TLS certificate validation is DISABLED "
+                        "(EXPFLOW_MONGODB_TLS_INSECURE=1). Connection is vulnerable "
+                        "to man-in-the-middle attacks. Use only on trusted networks.",
+                        file=sys.stderr,
+                    )
 
                 self._results_storage = ResultsStorage(
                     backend='mongodb',
                     connection_string=connection_string,
                     database=os.getenv('EXPFLOW_MONGODB_DATABASE', 'experiments')
                 )
-                print(f"[INFO] Using MongoDB backend")
+                print("[INFO] Using MongoDB backend")
 
             elif backend == 'postgresql':
                 # PostgreSQL backend (remote)
@@ -1691,7 +1902,7 @@ class BaseExperimentManager(ABC):
                     connection_string=connection_string,
                     table_name=os.getenv('EXPFLOW_POSTGRES_TABLE', 'experiments')
                 )
-                print(f"[INFO] Using PostgreSQL backend")
+                print("[INFO] Using PostgreSQL backend")
 
             else:
                 # SQLite backend (local, default)
@@ -1863,14 +2074,18 @@ class BaseExperimentManager(ABC):
         # Query current SLURM jobs
         try:
             result = subprocess.run(
-                ["squeue", "-u", os.environ.get("USER", ""), "-h", "-o", "%i"],
+                ["squeue", "-u", _resolve_user(), "-h", "-o", "%i"],
                 capture_output=True,
                 text=True,
-                check=True
+                check=True,
+                timeout=30,
             )
             job_ids = [j.strip() for j in result.stdout.strip().split() if j.strip()]
         except subprocess.CalledProcessError as e:
             print(f"[ERROR] Failed to query SLURM jobs: {e.stderr}")
+            return {}
+        except subprocess.TimeoutExpired:
+            print("[ERROR] squeue timed out after 30s")
             return {}
 
         if not job_ids:
@@ -1934,7 +2149,7 @@ class BaseExperimentManager(ABC):
 
         sbatch_cmd = [
             "sbatch",
-            f"--job-name=expflow_collect_results",
+            "--job-name=expflow_collect_results",
             f"--account={slurm_account}",
             f"--dependency={dependency}",
             f"--export={export_str}",
@@ -1950,14 +2165,15 @@ class BaseExperimentManager(ABC):
                 sbatch_cmd,
                 capture_output=True,
                 text=True,
-                check=True
+                check=True,
+                timeout=60,
             )
             job_id = result.stdout.strip().split()[-1]
             if verbose:
                 print(f"[OK] Submitted results collection job: {job_id}")
                 print(f"     Dependencies: {len(job_ids)} jobs ({', '.join(job_ids[:5])}{'...' if len(job_ids) > 5 else ''})")
                 print(f"     Status filter: {status_filter}")
-                print(f"     Collection will start after all current jobs finish")
+                print("     Collection will start after all current jobs finish")
             return {}
         except subprocess.CalledProcessError as e:
             print(f"[ERROR] Failed to submit collection job: {e.stderr}")
@@ -2019,7 +2235,7 @@ class BaseExperimentManager(ABC):
                     )
 
                     if not success and verbose:
-                        print(f"    WARNING: Failed to store in database")
+                        print("    WARNING: Failed to store in database")
 
                 except Exception as e:
                     if verbose:
@@ -2066,7 +2282,7 @@ class BaseExperimentManager(ABC):
                 filters={'status': 'completed'}
             )
         """
-        from .results_storage import export_to_json, export_to_csv
+        from .results_storage import export_to_csv, export_to_json
 
         # Auto-generate output path if not provided
         if output_path is None:
@@ -2474,34 +2690,77 @@ class BaseExperimentManager(ABC):
                 )
         return self._run_results_storage
 
+    @property
+    def attempt_summaries_storage(self):
+        """
+        Lazily-initialised storage for per-attempt-group summaries.
+
+        Mirrors the backend selection of ``results_storage`` /
+        ``run_results_storage`` but writes to a separate
+        ``attempt_summaries`` table/collection so summaries can be
+        re-materialised idempotently from raw run records (see
+        ``expflow.run_history.AttemptGrouping``).
+        """
+        if not hasattr(self, '_attempt_summaries_storage'):
+            from .results_storage import ResultsStorage
+            backend = os.getenv('EXPFLOW_BACKEND', 'sqlite')
+            connection_string = os.getenv('EXPFLOW_CONNECTION_STRING')
+
+            if backend == 'mongodb':
+                self._attempt_summaries_storage = ResultsStorage(
+                    backend='mongodb',
+                    connection_string=connection_string,
+                    database=os.getenv('EXPFLOW_MONGODB_DATABASE', 'experiments'),
+                    collection='attempt_summaries',
+                )
+            elif backend == 'postgresql':
+                self._attempt_summaries_storage = ResultsStorage(
+                    backend='postgresql',
+                    connection_string=connection_string,
+                    table_name='attempt_summaries',
+                )
+            else:
+                db_path = self.project_root / "attempt_summaries.db"
+                self._attempt_summaries_storage = ResultsStorage(
+                    backend='sqlite', path=str(db_path)
+                )
+        return self._attempt_summaries_storage
+
+    # Override on a subclass (or set ``self.scope_labels``) to teach the
+    # parser which scope labels (cities, sub-tasks, dataset shards, ...)
+    # may appear in eval-dir names. Defaults to an empty set so generic
+    # eval dirs without scopes still parse cleanly.
+    scope_labels: set = set()
+
     def _parse_eval_dir_metadata(self, dir_name: str) -> Dict[str, Any]:
         """
         Extract structured metadata from an evaluation directory name.
 
         Supports naming patterns:
-          - {exp_id}_eval_{split}_{city}_{date}_{time}_{job_id}
+          - {exp_id}_eval_{split}_{scope}_{date}_{time}_{job_id}
           - {exp_id}_eval_{split}_{date}_{time}_{job_id}
-          - {exp_id}_eval_{split}_{city}_{date}_{time}
-          - {exp_id}_eval_{split}_{city}_{date}
+          - {exp_id}_eval_{split}_{scope}_{date}_{time}
+          - {exp_id}_eval_{split}_{scope}_{date}
 
         Returns:
-            Dict with keys: exp_id, eval_split, city, timestamp, slurm_job_id
+            Dict with keys: exp_id, eval_split, city (kept for backwards
+            compat — equals scope), scope, timestamp, slurm_job_id
         """
-        known_cities = {"boston", "vegas", "pittsburgh", "singapore", "all"}
+        known_scopes = set(self.scope_labels) if self.scope_labels else set()
         parts = dir_name.split("_eval_")
 
         if len(parts) != 2:
             return {"exp_id": dir_name, "eval_split": None, "city": None,
-                    "timestamp": None, "slurm_job_id": None}
+                    "scope": None, "timestamp": None, "slurm_job_id": None}
 
         exp_id = parts[0]
         tokens = parts[1].split("_")
         eval_split = tokens[0] if tokens else None
-        city = None
+        scope = None
         date_start = 1
 
-        if len(tokens) > 1 and tokens[1] in known_cities:
-            city = tokens[1]
+        if len(tokens) > 1 and tokens[1] in known_scopes:
+            scope = tokens[1]
             date_start = 2
 
         timestamp = None
@@ -2512,8 +2771,10 @@ class BaseExperimentManager(ABC):
             if len(date_tokens) >= 3:
                 slurm_job_id = date_tokens[2]
 
-        return {"exp_id": exp_id, "eval_split": eval_split, "city": city,
-                "timestamp": timestamp, "slurm_job_id": slurm_job_id}
+        # ``city`` retained as alias of ``scope`` for backwards-compat
+        # with callers expecting the older key name.
+        return {"exp_id": exp_id, "eval_split": eval_split, "city": scope,
+                "scope": scope, "timestamp": timestamp, "slurm_job_id": slurm_job_id}
 
     def store_run_results(self, exp_id: str, force: bool = False) -> int:
         """
@@ -2740,7 +3001,7 @@ class BaseExperimentManager(ABC):
             latest = runs[-1]
             cities = latest.get("cities", {})
             if cities:
-                print(f"\n  Latest run per-city PDMS:")
+                print("\n  Latest run per-city PDMS:")
                 for city, data in sorted(cities.items()):
                     city_pdms = data.get("pdms", 0.0)
                     scenarios = data.get("scenarios", 0)
@@ -2940,7 +3201,7 @@ class BaseExperimentManager(ABC):
             f"cd {self.project_root}",
             "",
             f"for exp in {exp_list}; do",
-            f'    echo "=== Submitting $exp ==="',
+            '    echo "=== Submitting $exp ==="',
             f'    python {manager_script} submit "$exp"{flags_str} 2>&1',
             '    echo ""',
             "done",

@@ -21,7 +21,6 @@ import yaml
 
 from .checkpoint_validator import CheckpointResolver, ValidationReport
 
-
 # =============================================================================
 # Data classes
 # =============================================================================
@@ -359,7 +358,7 @@ class AnalysisPipeline:
                     metadata=handler_meta or {}
                 ))
                 if verbose:
-                    print(f"    [OK]")
+                    print("    [OK]")
             except Exception as e:
                 results.append(PipelineResult(
                     name=exp.name,
