@@ -568,6 +568,7 @@ class PostgreSQLBackend(BaseDatabaseBackend):
         try:
             import psycopg2
             import psycopg2.extras
+            from psycopg2 import sql as _pg_sql
         except ImportError:
             raise ImportError(
                 "PostgreSQL backend requires psycopg2. Install with: pip install psycopg2-binary"
@@ -576,10 +577,19 @@ class PostgreSQLBackend(BaseDatabaseBackend):
         if not connection_string:
             raise ValueError("PostgreSQL backend requires connection_string parameter")
 
+        # SQL-injection guard: table_name is interpolated into DDL
+        # statements that ``psycopg2.sql.Identifier`` quotes correctly,
+        # but we additionally restrict it to a strict identifier shape
+        # so the index names derived below (idx_<table>_status etc.) are
+        # also safe to interpolate.
+        from .script_utils import assert_safe_identifier
+        assert_safe_identifier(table_name)
+
         self.connection_string = connection_string
         self.table_name = table_name
         self.conn = None
         self.psycopg2 = psycopg2
+        self._pg_sql = _pg_sql
 
     def connect(self):
         """Establish PostgreSQL connection"""
@@ -598,43 +608,44 @@ class PostgreSQLBackend(BaseDatabaseBackend):
             self.conn = None
 
     def _create_tables(self):
-        """Create experiments table if not exists"""
+        """Create experiments table if not exists.
+
+        All identifiers (table name, derived index names) are quoted
+        through ``psycopg2.sql.Identifier`` so they cannot be
+        SQL-injected even if the constructor's ``assert_safe_identifier``
+        check is somehow bypassed.
+        """
+        sql = self._pg_sql
+        tbl = sql.Identifier(self.table_name)
+        idx_status = sql.Identifier(f"idx_{self.table_name}_status")
+        idx_created = sql.Identifier(f"idx_{self.table_name}_created_at")
+        idx_gin = sql.Identifier(f"idx_{self.table_name}_data_gin")
+
         with self.conn.cursor() as cur:
-            # Create table with JSONB for flexible schema
             cur.execute(
-                f"""
-                CREATE TABLE IF NOT EXISTS {self.table_name} (
-                    exp_id TEXT PRIMARY KEY,
-                    data JSONB NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """
+                sql.SQL(
+                    "CREATE TABLE IF NOT EXISTS {tbl} ("
+                    "exp_id TEXT PRIMARY KEY,"
+                    "data JSONB NOT NULL,"
+                    "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
+                    "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+                ).format(tbl=tbl)
             )
-
-            # Create indexes for common queries (JSONB supports indexing)
             cur.execute(
-                f"""
-                CREATE INDEX IF NOT EXISTS idx_{self.table_name}_status
-                ON {self.table_name} ((data->>'status'))
-            """
+                sql.SQL(
+                    "CREATE INDEX IF NOT EXISTS {idx} ON {tbl} ((data->>'status'))"
+                ).format(idx=idx_status, tbl=tbl)
             )
-
             cur.execute(
-                f"""
-                CREATE INDEX IF NOT EXISTS idx_{self.table_name}_created_at
-                ON {self.table_name} (created_at)
-            """
+                sql.SQL(
+                    "CREATE INDEX IF NOT EXISTS {idx} ON {tbl} (created_at)"
+                ).format(idx=idx_created, tbl=tbl)
             )
-
-            # GIN index for JSONB queries
             cur.execute(
-                f"""
-                CREATE INDEX IF NOT EXISTS idx_{self.table_name}_data_gin
-                ON {self.table_name} USING GIN (data)
-            """
+                sql.SQL(
+                    "CREATE INDEX IF NOT EXISTS {idx} ON {tbl} USING GIN (data)"
+                ).format(idx=idx_gin, tbl=tbl)
             )
-
             self.conn.commit()
 
     def store_experiment(self, exp_id: str, data: Dict[str, Any]) -> bool:
@@ -649,14 +660,15 @@ class PostgreSQLBackend(BaseDatabaseBackend):
             # Serialize data to JSON
             json_data = json.dumps(data)
 
+            sql = self._pg_sql
             with self.conn.cursor() as cur:
                 cur.execute(
-                    f"""
-                    INSERT INTO {self.table_name} (exp_id, data, updated_at)
-                    VALUES (%s, %s, CURRENT_TIMESTAMP)
-                    ON CONFLICT (exp_id)
-                    DO UPDATE SET data = EXCLUDED.data, updated_at = CURRENT_TIMESTAMP
-                """,
+                    sql.SQL(
+                        "INSERT INTO {tbl} (exp_id, data, updated_at) "
+                        "VALUES (%s, %s, CURRENT_TIMESTAMP) "
+                        "ON CONFLICT (exp_id) DO UPDATE "
+                        "SET data = EXCLUDED.data, updated_at = CURRENT_TIMESTAMP"
+                    ).format(tbl=sql.Identifier(self.table_name)),
                     (exp_id, json_data),
                 )
 
@@ -685,13 +697,13 @@ class PostgreSQLBackend(BaseDatabaseBackend):
             # Store updated data
             json_data = json.dumps(existing)
 
+            sql = self._pg_sql
             with self.conn.cursor() as cur:
                 cur.execute(
-                    f"""
-                    UPDATE {self.table_name}
-                    SET data = %s, updated_at = CURRENT_TIMESTAMP
-                    WHERE exp_id = %s
-                """,
+                    sql.SQL(
+                        "UPDATE {tbl} SET data = %s, updated_at = CURRENT_TIMESTAMP "
+                        "WHERE exp_id = %s"
+                    ).format(tbl=sql.Identifier(self.table_name)),
                     (json_data, exp_id),
                 )
 
@@ -708,11 +720,12 @@ class PostgreSQLBackend(BaseDatabaseBackend):
         try:
             self.connect()
 
+            sql = self._pg_sql
             with self.conn.cursor() as cur:
                 cur.execute(
-                    f"""
-                    SELECT data FROM {self.table_name} WHERE exp_id = %s
-                """,
+                    sql.SQL("SELECT data FROM {tbl} WHERE exp_id = %s").format(
+                        tbl=sql.Identifier(self.table_name)
+                    ),
                     (exp_id,),
                 )
 
@@ -727,54 +740,87 @@ class PostgreSQLBackend(BaseDatabaseBackend):
 
     def query_experiments(self, filters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         """
-        Query experiments with optional filters
+        Query experiments with optional filters.
 
         PostgreSQL supports JSONB queries:
         filters = {'status': 'completed', 'results.pdm_score': '>0.8'}
+
+        Each path segment of a filter key is validated as a strict
+        identifier (``[A-Za-z_][A-Za-z0-9_]*``) and then quoted as a
+        SQL literal via ``psycopg2.sql.Literal``. Comparison operators
+        come from a closed enum (``>=``, ``>``, ``<=``, ``<``, ``==``,
+        ``contains``) — anything else is rejected so the WHERE clause
+        is never built from unvalidated user input.
         """
         try:
             self.connect()
+            sql = self._pg_sql
+            from .script_utils import assert_safe_identifier
 
-            # Build WHERE clause for JSONB queries
             where_clauses = []
-            params = []
+            params: List[Any] = []
 
             if filters:
                 for field, value in filters.items():
-                    # Convert dot notation to JSONB path
-                    json_path = "->".join([f"'{part}'" for part in field.split(".")])
+                    # Validate every dotted segment as an identifier.
+                    parts = str(field).split(".")
+                    for part in parts:
+                        assert_safe_identifier(part)
+
+                    # Build the JSONB accessor: data -> 'a' -> 'b' -> 'c'
+                    json_path_sql = sql.SQL(" -> ").join(
+                        [sql.SQL("data")] + [sql.Literal(p) for p in parts]
+                    )
 
                     if isinstance(value, str):
-                        # Handle comparison operators
+                        operator: Optional[str] = None
+                        operand: Any = None
                         if value.startswith(">="):
-                            where_clauses.append(f"(data->{json_path})::float >= %s")
-                            params.append(float(value[2:]))
-                        elif value.startswith(">"):
-                            where_clauses.append(f"(data->{json_path})::float > %s")
-                            params.append(float(value[1:]))
+                            operator, operand = ">=", float(value[2:])
                         elif value.startswith("<="):
-                            where_clauses.append(f"(data->{json_path})::float <= %s")
-                            params.append(float(value[2:]))
+                            operator, operand = "<=", float(value[2:])
+                        elif value.startswith(">"):
+                            operator, operand = ">", float(value[1:])
                         elif value.startswith("<"):
-                            where_clauses.append(f"(data->{json_path})::float < %s")
-                            params.append(float(value[1:]))
+                            operator, operand = "<", float(value[1:])
                         elif value.startswith("=="):
-                            where_clauses.append(f"data->{json_path} = %s")
-                            params.append(json.dumps(value[2:]))
+                            operator, operand = "==", value[2:]
                         else:
-                            # String contains (case-insensitive)
-                            where_clauses.append(f"data->{json_path} ILIKE %s")
-                            params.append(f"%{value}%")
+                            operator, operand = "contains", value
+
+                        if operator in (">", ">=", "<", "<="):
+                            where_clauses.append(
+                                sql.SQL("({path})::float {op} %s").format(
+                                    path=json_path_sql,
+                                    op=sql.SQL(operator),
+                                )
+                            )
+                            params.append(operand)
+                        elif operator == "==":
+                            where_clauses.append(
+                                sql.SQL("{path} = %s").format(path=json_path_sql)
+                            )
+                            params.append(json.dumps(operand))
+                        else:
+                            # case-insensitive contains
+                            where_clauses.append(
+                                sql.SQL("{path} ILIKE %s").format(path=json_path_sql)
+                            )
+                            params.append(f"%{operand}%")
                     else:
-                        # Direct match
-                        where_clauses.append(f"data->{json_path} = %s")
+                        where_clauses.append(
+                            sql.SQL("{path} = %s").format(path=json_path_sql)
+                        )
                         params.append(json.dumps(value))
 
-            # Build query
-            query = f"SELECT data FROM {self.table_name}"
+            query = sql.SQL("SELECT data FROM {tbl}").format(
+                tbl=sql.Identifier(self.table_name)
+            )
             if where_clauses:
-                query += " WHERE " + " AND ".join(where_clauses)
-            query += " ORDER BY created_at DESC"
+                query = sql.SQL("{q} WHERE {w}").format(
+                    q=query, w=sql.SQL(" AND ").join(where_clauses)
+                )
+            query = sql.SQL("{q} ORDER BY created_at DESC").format(q=query)
 
             with self.conn.cursor() as cur:
                 cur.execute(query, params)
@@ -793,9 +839,13 @@ class PostgreSQLBackend(BaseDatabaseBackend):
         try:
             self.connect()
 
+            sql = self._pg_sql
             with self.conn.cursor() as cur:
                 cur.execute(
-                    f"DELETE FROM {self.table_name} WHERE exp_id = %s", (exp_id,)
+                    sql.SQL("DELETE FROM {tbl} WHERE exp_id = %s").format(
+                        tbl=sql.Identifier(self.table_name)
+                    ),
+                    (exp_id,),
                 )
 
             self.conn.commit()

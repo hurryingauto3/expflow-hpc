@@ -104,7 +104,7 @@ class HPCEnvironment:
         """Get current username"""
         try:
             return pwd.getpwuid(os.getuid()).pw_name
-        except:
+        except Exception:
             return os.getenv("USER", "unknown")
 
     @staticmethod
@@ -180,7 +180,7 @@ class HPCEnvironment:
                         seen.add(acc)
                         unique_accounts.append(acc)
                 return unique_accounts
-        except:
+        except Exception:
             pass
 
         return []
@@ -259,7 +259,7 @@ class HPCEnvironment:
                         seen.add(part)
                         unique_partitions.append(part)
                 return unique_partitions
-        except:
+        except Exception:
             pass
 
         return []
@@ -345,7 +345,7 @@ class HPCEnvironment:
 
             # Success if would schedule
             return result.returncode == 0 and "to start at" in result.stdout
-        except:
+        except Exception:
             return False
 
 
